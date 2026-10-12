@@ -21,10 +21,28 @@ jobs:
     defaults:
       run:
         working-directory: api
+
+    # `services:` = Docker containers GitHub starts next to the job, like a mini
+    # docker-compose. Our integration tests hit a REAL Postgres, not a mock.
+    services:
+      postgres:
+        image: postgres:16.6-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ai_media_studio_test
+        ports:
+          - 5432:5432
+        # Job steps wait until this passes, so tests never race a booting DB.
+        options: >-
+          --health-cmd "pg_isready -U ci"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     env:
-      # Dummy URL: Phase 0 tests stub the DB. Real Postgres/Redis service
-      # containers are added here once integration tests exist (Phase 1).
-      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/ai_media_studio_test
+      TEST_DATABASE_URL: postgresql://ci:ci@localhost:5432/ai_media_studio_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -36,7 +54,7 @@ jobs:
       - run: npx prisma validate
       - run: npm run typecheck
       - run: npm run lint
-      - run: npm test
+      - run: npm test               # global-setup runs `prisma migrate deploy` on the service DB first
       - run: npm run build
 
   web:

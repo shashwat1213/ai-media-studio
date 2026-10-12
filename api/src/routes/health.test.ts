@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../app.js';
+import { testConfig } from '../../test/helpers.js';
 
+// Unit test: the DB is faked, so we can simulate it being down.
 function appWith(queryRaw: () => Promise<unknown>) {
-  return createApp({ db: { $queryRaw: queryRaw } as never, corsOrigin: '*' });
+  return createApp({ prisma: { $queryRaw: queryRaw } as never, config: testConfig });
 }
 
 describe('GET /health', () => {

@@ -1,9 +1,9 @@
 // Prisma schema — single source of truth for the database structure.
-// Phase 0 keeps only a minimal User; the full model lands in Phase 1.
+// Spec: specs/02_auth_credits_spec.md
 
 generator client {
   provider = "prisma-client-js"
-  // linux-musl: needed later so the client works inside node:22-alpine images
+  // linux-musl: needed so the client works inside node:22-alpine images (Phase 4)
   binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
@@ -13,8 +13,34 @@ datasource db {
 }
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
+  id           String              @id @default(uuid())
+  email        String              @unique // always stored lower-cased
   passwordHash String
-  createdAt    DateTime @default(now())
+  /// Current balance = cached sum of this user's ledger. Never negative (DB CHECK constraint).
+  credits      Int                 @default(0)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  transactions CreditTransaction[]
+}
+
+enum CreditReason {
+  SIGNUP_BONUS
+  PURCHASE
+  GENERATION
+  REFUND
+}
+
+/// Append-only ledger: every change to User.credits gets exactly one row here,
+/// written in the same DB transaction as the balance update.
+model CreditTransaction {
+  id           String       @id @default(uuid())
+  userId       String
+  delta        Int // +grant / -debit
+  reason       CreditReason
+  balanceAfter Int
+  refId        String? // jobId / paymentId (Phase 2/3)
+  createdAt    DateTime     @default(now())
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
 }
