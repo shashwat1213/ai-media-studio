@@ -1,0 +1,47 @@
+{
+  "machine": {
+    "date": "2026-10-12",
+    "cpu": "AMD Ryzen 7 170 with Radeon Graphics",
+    "threads": 16,
+    "ramGb": 30,
+    "node": "v24.19.0"
+  },
+  "results": [
+    {
+      "concurrency": 1,
+      "jobs": 200,
+      "wallSeconds": 9,
+      "jobsPerSecond": 22.2,
+      "perJobP50Ms": 41,
+      "perJobP95Ms": 47,
+      "failed": 0,
+      "assets": 200,
+      "refunds": 0,
+      "usersWithLedgerDrift": 0
+    },
+    {
+      "concurrency": 4,
+      "jobs": 200,
+      "wallSeconds": 7.44,
+      "jobsPerSecond": 26.9,
+      "perJobP50Ms": 108,
+      "perJobP95Ms": 146,
+      "failed": 0,
+      "assets": 200,
+      "refunds": 0,
+      "usersWithLedgerDrift": 0
+    },
+    {
+      "concurrency": 8,
+      "jobs": 200,
+      "wallSeconds": 8.02,
+      "jobsPerSecond": 24.9,
+      "perJobP50Ms": 250,
+      "perJobP95Ms": 297,
+      "failed": 0,
+      "assets": 200,
+      "refunds": 0,
+      "usersWithLedgerDrift": 0
+    }
+  ]
+}

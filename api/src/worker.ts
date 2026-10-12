@@ -43,7 +43,9 @@ async function shutdown(signal: string) {
   setTimeout(() => process.exit(1), 30_000).unref();
   http.close();
   await running.close();
-  await connection.quit();
+  // worker.close() already closes the shared connection it was given; quit() would throw
+  // "Connection is closed". Guard it so shutdown stays clean.
+  await connection.quit().catch(() => undefined);
   storage.destroy();
   await prisma.$disconnect();
   process.exit(0);

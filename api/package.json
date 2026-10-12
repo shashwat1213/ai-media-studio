@@ -16,7 +16,8 @@
     "prisma:migrate": "prisma migrate dev",
     "postinstall": "prisma generate",
     "test:coverage": "vitest run --coverage",
-    "bench": "tsx bench/run.ts"
+    "bench": "tsx bench/run.ts",
+    "bench:pipeline": "tsx bench/pipeline.ts"
   },
   "type": "module",
   "dependencies": {

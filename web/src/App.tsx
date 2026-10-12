@@ -7,6 +7,8 @@ import { GuestOnly, RequireAuth } from '@/features/auth/route-guards';
 // when that route is visited. The login page doesn't ship dashboard code.
 const AppShell = lazy(() => import('@/components/layout/app-shell').then((m) => ({ default: m.AppShell })));
 const DashboardPage = lazy(() => import('@/pages/dashboard-page').then((m) => ({ default: m.DashboardPage })));
+const GeneratePage = lazy(() => import('@/pages/generate-page').then((m) => ({ default: m.GeneratePage })));
+const GalleryPage = lazy(() => import('@/pages/gallery-page').then((m) => ({ default: m.GalleryPage })));
 const LoginPage = lazy(() => import('@/pages/login-page').then((m) => ({ default: m.LoginPage })));
 const RegisterPage = lazy(() => import('@/pages/register-page').then((m) => ({ default: m.RegisterPage })));
 const NotFoundPage = lazy(() => import('@/pages/not-found-page').then((m) => ({ default: m.NotFoundPage })));
@@ -31,6 +33,8 @@ export default function App() {
           <Route element={<RequireAuth />}>
             <Route element={<AppShell />}>
               <Route index element={<DashboardPage />} />
+              <Route path="/generate" element={<GeneratePage />} />
+              <Route path="/gallery" element={<GalleryPage />} />
             </Route>
           </Route>
           <Route path="*" element={<NotFoundPage />} />
