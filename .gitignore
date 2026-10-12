@@ -9,3 +9,5 @@ coverage/
 *.log
 .vscode/
 .idea/
+# benchmark output is machine-specific; the rendered docs/BENCHMARKS.md is committed
+api/bench/results.json

@@ -14,5 +14,13 @@ export default defineConfig({
     // Test files share one database and truncate it between tests -> run files one at a time.
     fileParallelism: false,
     testTimeout: 15_000,
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.ts'],
+      exclude: ['src/**/*.test.ts', 'src/server.ts', 'src/types/**'],
+      reporter: ['text-summary', 'json-summary', 'html'],
+      // CI fails if coverage drops below these (set just under the measured values).
+      thresholds: { lines: 90, functions: 90, branches: 80, statements: 90 },
+    },
   },
 });

@@ -1,6 +1,6 @@
 name: CI
 
-# Runs on every push and every PR. CD (deploy to AWS) comes in Phase 5.
+# Runs on every push to main and every PR. CD (deploy to AWS) comes in Phase 5.
 on:
   push:
     branches: [main]
@@ -16,8 +16,9 @@ permissions:
 
 jobs:
   api:
-    name: API — typecheck, lint, test, build
+    name: API — typecheck, lint, test + coverage, build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: api
@@ -54,12 +55,23 @@ jobs:
       - run: npx prisma validate
       - run: npm run typecheck
       - run: npm run lint
-      - run: npm test               # global-setup runs `prisma migrate deploy` on the service DB first
+      # global-setup runs `prisma migrate deploy` first; fails if coverage < thresholds
+      - run: npm run test:coverage
+      - name: Coverage summary
+        if: always()
+        run: |
+          node -e '
+            const t = require("./coverage/coverage-summary.json").total;
+            const row = k => `| ${k} | ${t[k].pct}% | ${t[k].covered}/${t[k].total} |`;
+            console.log(["### API test coverage", "| Metric | % | Covered |", "|---|---|---|",
+              ...["lines","statements","functions","branches"].map(row)].join("\n"));
+          ' >> "$GITHUB_STEP_SUMMARY"
       - run: npm run build
 
   web:
-    name: Web — typecheck, lint, build
+    name: Web — typecheck, lint, build, bundle budget
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: web
@@ -74,3 +86,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run build
+      - name: Bundle size budget
+        run: |
+          npm run --silent size | tee size.txt
+          { echo '### Web bundle'; echo '```'; cat size.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

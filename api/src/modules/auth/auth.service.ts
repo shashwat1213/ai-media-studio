@@ -1,15 +1,18 @@
-import bcrypt from 'bcryptjs';
+// Native bcrypt: hashing runs on libuv's thread pool, so the event loop stays free.
+// (bcryptjs, pure JS, blocked the event loop ~800 ms per burst; see specs/03 learnings.)
+import bcrypt from 'bcrypt';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { conflict, unauthorized } from '../../lib/errors.js';
 import type { Credentials } from './auth.schemas.js';
 import { toPublicUser, type PublicUser } from './public-user.js';
+import type { Metrics } from '../../observability/metrics.js';
 
 export interface AuthServiceOptions {
   bcryptCost: number;
   signupBonusCredits: number;
 }
 
-export function createAuthService(prisma: PrismaClient, opts: AuthServiceOptions) {
+export function createAuthService(prisma: PrismaClient, opts: AuthServiceOptions, metrics?: Metrics) {
   // Used when the email doesn't exist, so login always does one bcrypt compare
   // and response time doesn't reveal whether an account exists.
   const dummyHash = bcrypt.hashSync('timing-equaliser-not-a-real-password', opts.bcryptCost);
@@ -28,6 +31,8 @@ export function createAuthService(prisma: PrismaClient, opts: AuthServiceOptions
             transactions: bonus > 0 ? { create: { delta: bonus, reason: 'SIGNUP_BONUS', balanceAfter: bonus } } : undefined,
           },
         });
+        metrics?.authEvents.inc({ event: 'register' });
+        if (bonus > 0) metrics?.creditsGranted.inc({ reason: 'SIGNUP_BONUS' }, bonus);
         return toPublicUser(user);
       } catch (err) {
         // P2002 = unique constraint violation (email already taken). Relying on the DB
@@ -42,7 +47,11 @@ export function createAuthService(prisma: PrismaClient, opts: AuthServiceOptions
     async login({ email, password }: Credentials): Promise<PublicUser> {
       const user = await prisma.user.findUnique({ where: { email } });
       const ok = await bcrypt.compare(password, user?.passwordHash ?? dummyHash);
-      if (!user || !ok) throw unauthorized('Invalid email or password'); // same message either way
+      if (!user || !ok) {
+        metrics?.authEvents.inc({ event: 'login_failure' }); // a spike here = credential stuffing
+        throw unauthorized('Invalid email or password'); // same message either way
+      }
+      metrics?.authEvents.inc({ event: 'login_success' });
       return toPublicUser(user);
     },
 

@@ -15,4 +15,9 @@ export default tseslint.config(
       ...reactHooks.configs.recommended.rules,
     },
   },
+  {
+    // Build/CI helper scripts run in Node, not the browser.
+    files: ['scripts/**/*.mjs'],
+    languageOptions: { globals: globals.node },
+  },
 );

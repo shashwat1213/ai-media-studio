@@ -9,6 +9,7 @@ export interface AppConfig {
   signupBonusCredits: number;
   authRateLimit: number;
   secureCookies: boolean; // true in production (HTTPS only)
+  metricsToken?: string;
 }
 
 export function toAppConfig(env: Env): AppConfig {
@@ -20,5 +21,6 @@ export function toAppConfig(env: Env): AppConfig {
     signupBonusCredits: env.SIGNUP_BONUS_CREDITS,
     authRateLimit: env.AUTH_RATE_LIMIT,
     secureCookies: env.NODE_ENV === 'production',
+    metricsToken: env.METRICS_TOKEN,
   };
 }

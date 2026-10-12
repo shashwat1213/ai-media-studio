@@ -25,15 +25,21 @@ cd ../web && npm install
 npm run dev                          # http://localhost:5173
 ```
 
+## Benchmarks & metrics
+- `cd api && npm run build && npm run bench` → writes `docs/BENCHMARKS.md` (HTTP throughput/latency + credit-ledger stress test).
+- Metrics: `GET /metrics` (Prometheus). Logs: structured JSON (pino) with per-request `X-Request-Id`.
+- Resume-ready, reproducible numbers: `docs/RESUME_METRICS.md`.
+
 ## Checks (same as CI)
 ```bash
-cd api && npm run typecheck && npm run lint && npm test && npm run build
-cd web && npm run typecheck && npm run lint && npm run build
+cd api && npm run typecheck && npm run lint && npm run test:coverage && npm run build
+cd web && npm run typecheck && npm run lint && npm run build && npm run size
 ```
 
 ## Status
 - [x] Phase 0 — scaffold
 - [x] Phase 1 — auth + credits
+- [x] Observability + benchmarks (pino, Prometheus, autocannon, coverage, bundle budget)
 - [ ] Phase 2 — generation + jobs
 - [ ] Phase 3 — payments (optional)
 - [ ] Phase 4 — Dockerize fully
