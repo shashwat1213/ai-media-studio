@@ -1,15 +1,16 @@
 import type { CreditReason, PrismaClient } from '@prisma/client';
 import { InsufficientCreditsError } from '../../lib/errors.js';
+import type { Metrics } from '../../observability/metrics.js';
 
 /**
  * The ONLY code allowed to change a user's credit balance.
  * Every change = balance update + ledger row, in one DB transaction.
  */
-export function createCreditService(prisma: PrismaClient) {
+export function createCreditService(prisma: PrismaClient, metrics?: Metrics) {
   return {
     async grant(userId: string, amount: number, reason: CreditReason, refId?: string) {
       assertPositive(amount);
-      return prisma.$transaction(async (tx) => {
+      const row = await prisma.$transaction(async (tx) => {
         const { credits } = await tx.user.update({
           where: { id: userId },
           data: { credits: { increment: amount } },
@@ -19,6 +20,8 @@ export function createCreditService(prisma: PrismaClient) {
           data: { userId, delta: amount, reason, refId, balanceAfter: credits },
         });
       });
+      metrics?.creditsGranted.inc({ reason }, amount); // count only after commit
+      return row;
     },
 
     /**
@@ -28,12 +31,15 @@ export function createCreditService(prisma: PrismaClient) {
      */
     async debit(userId: string, amount: number, reason: CreditReason, refId?: string) {
       assertPositive(amount);
-      return prisma.$transaction(async (tx) => {
+      const row = await prisma.$transaction(async (tx) => {
         const { count } = await tx.user.updateMany({
           where: { id: userId, credits: { gte: amount } },
           data: { credits: { decrement: amount } },
         });
-        if (count === 0) throw new InsufficientCreditsError();
+        if (count === 0) {
+          metrics?.debitRejected.inc();
+          throw new InsufficientCreditsError();
+        }
 
         // We hold the row lock until commit, so this read sees our own update.
         const { credits } = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { credits: true } });
@@ -41,6 +47,8 @@ export function createCreditService(prisma: PrismaClient) {
           data: { userId, delta: -amount, reason, refId, balanceAfter: credits },
         });
       });
+      metrics?.creditsDebited.inc(amount);
+      return row;
     },
 
     async getSummary(userId: string, limit: number) {

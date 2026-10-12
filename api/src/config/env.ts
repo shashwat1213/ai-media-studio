@@ -16,6 +16,12 @@ const EnvSchema = z.object({
   BCRYPT_COST: z.coerce.number().int().min(4).max(15).default(12),
   SIGNUP_BONUS_CREDITS: z.coerce.number().int().min(0).default(50),
   AUTH_RATE_LIMIT: z.coerce.number().int().positive().default(20), // requests / 15 min / IP
+  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).optional(),
+  // Bearer token protecting GET /metrics. Required in production (see refine below).
+  METRICS_TOKEN: z.string().min(16).optional(),
+}).refine((e) => e.NODE_ENV !== 'production' || e.METRICS_TOKEN, {
+  message: 'METRICS_TOKEN is required in production',
+  path: ['METRICS_TOKEN'],
 });
 
 export type Env = z.infer<typeof EnvSchema>;
