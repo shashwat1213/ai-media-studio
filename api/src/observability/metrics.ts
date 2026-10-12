@@ -49,6 +49,43 @@ export function createMetrics() {
       help: 'Debits rejected for insufficient credits',
       registers: [registry],
     }),
+    // --- Phase 2: generation pipeline ---
+    jobsCreated: new Counter({
+      name: 'generation_jobs_created_total',
+      help: 'Generation jobs accepted by the API',
+      labelNames: ['model'] as const,
+      registers: [registry],
+    }),
+    jobOutcomes: new Counter({
+      name: 'generation_job_outcomes_total',
+      help: 'Finished generation jobs by outcome',
+      labelNames: ['outcome', 'model'] as const, // outcome: done | failed | retried | swept
+      registers: [registry],
+    }),
+    jobDuration: new Histogram({
+      name: 'generation_job_duration_seconds',
+      help: 'Worker time per job attempt (provider call + upload + DB)',
+      labelNames: ['outcome'] as const,
+      buckets: [0.5, 1, 2.5, 5, 10, 20, 30, 60, 120],
+      registers: [registry],
+    }),
+    providerDuration: new Histogram({
+      name: 'ai_provider_request_duration_seconds',
+      help: 'AI provider call latency',
+      labelNames: ['provider', 'outcome'] as const,
+      buckets: [0.5, 1, 2.5, 5, 10, 20, 30, 60, 120],
+      registers: [registry],
+    }),
+    providerCostUsd: new Counter({
+      name: 'ai_provider_cost_usd_total',
+      help: 'USD reported by the AI provider (0 in stub mode)',
+      registers: [registry],
+    }),
+    creditsRefunded: new Counter({
+      name: 'credits_refunded_total',
+      help: 'Credits refunded for failed jobs',
+      registers: [registry],
+    }),
   };
 }
 

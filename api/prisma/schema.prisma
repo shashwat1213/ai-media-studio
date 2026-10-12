@@ -2,7 +2,7 @@
 // Spec: specs/02_auth_credits_spec.md
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
   // linux-musl: needed so the client works inside node:22-alpine images (Phase 4)
   binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
@@ -21,6 +21,8 @@ model User {
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
   transactions CreditTransaction[]
+  jobs         GenerationJob[]
+  assets       Asset[]
 }
 
 enum CreditReason {
@@ -41,6 +43,62 @@ model CreditTransaction {
   refId        String? // jobId / paymentId (Phase 2/3)
   createdAt    DateTime     @default(now())
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: generation jobs + assets. Spec: specs/04_generation_spec.md
+// ---------------------------------------------------------------------------
+
+/// QUEUED -> PROCESSING -> DONE | FAILED. Transitions are conditional updates
+/// (UPDATE ... WHERE status IN (...)) so a late/duplicate message can't move a job backwards.
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  DONE
+  FAILED
+}
+
+model GenerationJob {
+  id             String    @id @default(uuid())
+  userId         String
+  prompt         String
+  model          String
+  aspectRatio    String
+  status         JobStatus @default(QUEUED)
+  /// Credits reserved when the job was created. Refunded once if the job ends FAILED.
+  creditsCost    Int
+  attempts       Int       @default(0)
+  /// User-safe failure message (never a stack trace).
+  error          String?
+  /// Client-supplied Idempotency-Key header: a retried request returns the same job, no double charge.
+  idempotencyKey String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  asset          Asset?
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt])
+  @@index([status, updatedAt]) // stuck-job sweeper
+}
+
+/// A generated file in S3/MinIO. The bytes live in object storage; this row is the index.
+model Asset {
+  id         String        @id @default(uuid())
+  userId     String
+  jobId      String        @unique
+  storageKey String        @unique // users/<userId>/<jobId>.<ext>
+  mimeType   String
+  bytes      Int
+  width      Int?
+  height     Int?
+  createdAt  DateTime      @default(now())
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job        GenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
 }

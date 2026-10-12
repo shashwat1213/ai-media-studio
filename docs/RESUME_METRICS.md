@@ -77,5 +77,31 @@ The atomic credit ledger holds under heavy contention — no overspend, no drift
 
 ## Numbers you have NOT earned yet (do not claim until the phase is done)
 - Docker image size reduction — needs Phase 4 (multi-stage build; measure before/after).
+
+---
+
+## 6. Async job pipeline (Phase 2): queue → worker → storage, correct under load
+
+A real background pipeline: `POST /generate` reserves credits + enqueues (BullMQ/Redis), a separate worker calls the provider, uploads to S3/MinIO, records the asset, and keeps the credit ledger exactly right. Measured with the stub provider at **0 ms delay**, so these numbers are OUR overhead (queue + Postgres + S3 round-trips), not AI speed.
+
+| Worker concurrency | Throughput | Per-job p50 / p95 | Correctness (200 jobs, 20 users) |
+|---|---|---|---|
+| 1 | ~22 jobs/s | 41 / 47 ms | 0 failed · 0 ledger drift |
+| 4 | ~27 jobs/s | 108 / 146 ms | 0 failed · 0 ledger drift |
+| 8 | ~25 jobs/s | 250 / 297 ms | 0 failed · 0 ledger drift |
+
+Throughput plateaus around single-instance MinIO's PUT latency (the honest bottleneck — a real S3 or more worker tasks would scale further). The point that matters: **every run finished all 200 jobs with zero overspend and `SUM(ledger) == balance` for every user.**
+
+Correctness properties verified by tests (real Postgres + Redis + S3, not mocks):
+- **Reserve-then-refund** credit flow; 10 parallel generate requests on a 50-credit balance → exactly the affordable number succeed, never negative.
+- **Exactly-once refund** on failure — enforced twice: a guarded status transition AND a partial unique index in Postgres (`one REFUND row per job`). 10 concurrent refund attempts → 1 refund.
+- **Idempotency-Key**: a retried request returns the same job, charged once; parallel duplicates collapse to one.
+- **Crash-safe**: deterministic storage keys + guarded transitions mean a retry overwrites instead of leaking, and a job the sweeper already refunded can't be delivered for free.
+
+**Reproduce:** `cd api && npm run bench:pipeline` (needs the compose infra up) → `bench/pipeline-results.json`; correctness in `npm test` (`generation.test.ts`, `worker.test.ts`).
+**Resume line (honest):** "Built an async image-generation pipeline (BullMQ/Redis worker + S3) with a reserve/refund credit ledger that stays correct under concurrency — exactly-once refunds guarded by both application logic and a Postgres partial-unique index, verified with a 200-job pipeline and parallel-request tests showing zero overspend and zero ledger drift."
+
+## Numbers you have NOT earned yet (still)
+- Docker image size reduction — needs Phase 4 (multi-stage build; measure before/after).
 - "Deployed on AWS", uptime, cost — needs Phase 5.
 - Any user/traffic/revenue figure — this is a portfolio project; inventing these is the fastest way to fail an interview.

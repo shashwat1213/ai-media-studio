@@ -21,3 +21,7 @@ export class InsufficientCreditsError extends HttpError {
     super(402, 'Insufficient credits');
   }
 }
+
+export const notFound = (msg = 'Not found') => new HttpError(404, msg);
+export const tooManyRequests = (msg: string) => new HttpError(429, msg);
+export const serviceUnavailable = (msg: string) => new HttpError(503, msg);

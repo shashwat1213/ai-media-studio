@@ -56,3 +56,55 @@ export interface Health {
   status: 'ok' | 'degraded';
   db: 'up' | 'down';
 }
+
+// ---- Phase 2: generation ----
+
+export type JobStatus = 'QUEUED' | 'PROCESSING' | 'DONE' | 'FAILED';
+
+export interface ModelOption {
+  id: string;
+  name: string;
+  description: string;
+  credits: number;
+}
+
+export interface ModelCatalog {
+  mode: 'stub' | 'openrouter';
+  models: ModelOption[];
+  aspectRatios: string[];
+}
+
+export interface Asset {
+  id: string;
+  jobId: string;
+  url: string; // presigned, short-lived
+  downloadUrl: string;
+  mimeType: string;
+  bytes: number;
+  width: number | null;
+  height: number | null;
+  createdAt: string;
+  prompt?: string;
+  model?: string;
+  aspectRatio?: string;
+}
+
+export interface Job {
+  id: string;
+  prompt: string;
+  model: string;
+  aspectRatio: string;
+  status: JobStatus;
+  creditsCost: number;
+  attempts: number;
+  error: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  asset: Asset | null;
+}
+
+export interface Page<T> {
+  items: T[];
+  nextCursor: string | null;
+}

@@ -1,14 +1,19 @@
-import { Coins, Wand2 } from 'lucide-react';
+import { Link } from 'react-router';
+import { ArrowRight, Coins, Images, Wand2 } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useMe } from '@/features/auth/use-auth';
 import { useCredits } from '@/features/credits/use-credits';
 import { TransactionsTable } from '@/features/credits/transactions-table';
+import { useAssets } from '@/features/generation/use-generation';
 
 export function DashboardPage() {
   const { data: user } = useMe();
   const credits = useCredits(20);
+  const recent = useAssets(6);
+  const recentItems = recent.data?.pages[0]?.items ?? [];
 
   return (
     <motion.div
@@ -36,16 +41,61 @@ export function DashboardPage() {
             )}
           </CardContent>
         </Card>
-        <Card className="border-dashed">
+        <Card className="bg-gradient-to-br from-primary/10 to-transparent">
           <CardHeader className="flex flex-row items-center justify-between space-y-0">
-            <CardDescription>Generate</CardDescription>
-            <Wand2 className="size-4 text-muted-foreground" />
+            <CardDescription>Create</CardDescription>
+            <Wand2 className="size-4 text-primary" />
           </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">Text → image generation arrives in Phase 2.</p>
+          <CardContent className="flex items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">Turn a text prompt into an image, from 2 credits.</p>
+            <Button asChild>
+              <Link to="/generate">
+                Generate
+                <ArrowRight />
+              </Link>
+            </Button>
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <div className="space-y-1.5">
+            <CardTitle>Recent creations</CardTitle>
+            <CardDescription>Your latest images.</CardDescription>
+          </div>
+          {recentItems.length > 0 && (
+            <Button asChild variant="ghost" size="sm">
+              <Link to="/gallery">
+                View all
+                <ArrowRight />
+              </Link>
+            </Button>
+          )}
+        </CardHeader>
+        <CardContent>
+          {recent.isLoading ? (
+            <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
+              {Array.from({ length: 6 }, (_, i) => (
+                <Skeleton key={i} className="aspect-square w-full rounded-lg" />
+              ))}
+            </div>
+          ) : recentItems.length === 0 ? (
+            <div className="flex items-center gap-3 py-4 text-sm text-muted-foreground">
+              <Images className="size-5" />
+              No images yet. <Link to="/generate" className="font-medium text-primary hover:underline">Create your first one</Link>
+            </div>
+          ) : (
+            <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
+              {recentItems.map((a) => (
+                <Link key={a.id} to="/gallery" className="overflow-hidden rounded-lg bg-muted" title={a.prompt}>
+                  <img src={a.url} alt={a.prompt ?? 'Generated image'} loading="lazy" className="aspect-square w-full object-cover" />
+                </Link>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
