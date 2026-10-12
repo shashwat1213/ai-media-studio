@@ -1,8 +1,10 @@
-import { env } from './config/env.js';
+import { loadEnv } from './config/env.js';
+import { toAppConfig } from './config/app-config.js';
 import { prisma } from './lib/prisma.js';
 import { createApp } from './app.js';
 
-const app = createApp({ db: prisma, corsOrigin: env.CORS_ORIGIN });
+const env = loadEnv();
+const app = createApp({ prisma, config: toAppConfig(env) });
 
 const server = app.listen(env.PORT, () => {
   console.log(`API listening on http://localhost:${env.PORT}`);
@@ -10,8 +12,8 @@ const server = app.listen(env.PORT, () => {
 
 /**
  * Graceful shutdown: Docker/ECS send SIGTERM before killing a container.
- * We stop accepting new requests, let in-flight ones finish, close the DB pool,
- * then exit. This is what makes rolling deployments zero-downtime.
+ * Stop accepting new requests, let in-flight ones finish, close the DB pool, exit.
+ * This is what makes rolling deployments zero-downtime.
  */
 function shutdown(signal: string) {
   console.log(`${signal} received, shutting down`);
