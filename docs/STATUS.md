@@ -1,39 +1,47 @@
 # Status & Next Steps (handoff)
 
-_Last updated: 2026-10-12 (Phase 2 complete)_
+_Last updated: 2026-10-12 (Phase 4 complete)_
 
 ## Where things stand
 | Branch | State | Contents |
 |---|---|---|
-| `main` | pushed, CI green | Phase 0 (scaffold) + Phase 1 (auth + credits) + observability, all merged |
-| `feat/generation` | pushed, PR #3 (draft), CI green | **Phase 2: generation + jobs** |
+| `main` | pushed, CI green | Phase 0, 1, observability, **Phase 2 (generation)** merged |
+| `feat/dockerize` | PR open | **Phase 4: full Docker** (multi-stage images, 8-service compose, CI image build + smoke test) |
 
-Phase 2 is built and verified end-to-end. Nothing destructive pending.
+Phase 3 (Razorpay payments) was skipped for now. It's optional and can be done any time.
 
-## Local run (3 processes + infra)
+## Run everything in Docker (one command)
 ```
-docker compose up -d                 # postgres :5433, redis :6379, silo/minio :9000/:9001
-cd api && npm run dev                 # API on :4000
-cd api && npm run dev:worker          # worker on :4001 (/health, /metrics)
-cd web && npm run dev                 # UI on :5173
+docker compose up -d --build        # postgres, redis, minio, migrate, api, worker, web
+open http://localhost:8080          # the app (nginx -> SPA + /api proxy)
+./scripts/smoke.sh                  # end-to-end check through the containers
+docker compose down                 # stop (data stays in named volumes)
 ```
-Default is **stub mode** (free fake images). For real AI: set `AI_PROVIDER=openrouter` + `OPENROUTER_API_KEY` in `api/.env`.
+MinIO console: http://localhost:9001 (minioadmin / minioadmin).
+
+## Or run the code natively (fast dev loop)
+```
+docker compose up -d postgres redis minio minio-init
+cd api && npm run dev               # :4000
+cd api && npm run dev:worker        # :4001
+cd web && npm run dev               # :5173
+```
+Note: the full Docker stack also binds :4000, so stop the `api` container before `npm run dev`
+(`docker compose stop api worker web`).
 
 ## Verify commands
 ```
 cd api && npm run typecheck && npm run lint && npm run test:coverage && npm run build
 cd web && npm run typecheck && npm run lint && npm run build && npm run size
-cd api && npm run bench:pipeline      # job pipeline throughput (optional, needs infra up)
+docker compose up -d --build && ./scripts/smoke.sh
 ```
-Currently: api 83 tests pass, 93% lines; web builds, initial JS ~102 kB gzip.
 
 ## Next steps
-1. Review PR #3, mark ready, merge into `main` (same flow as Phase 1).
-2. **Phase 3 (optional): Payments** — Razorpay test-mode order + verify → grant credits (PURCHASE ledger reason already exists).
-   Or skip to **Phase 4: Dockerize fully** — multi-stage Dockerfiles for api/worker/web, harden compose, image-size pass (resume metric).
-3. **Phase 5: CI/CD + AWS** — ECR, ECS Fargate (api + worker services), RDS, S3, ElastiCache/Redis, OIDC deploy, `COST.md`.
+1. Merge the Phase 4 PR once CI is green.
+2. **Phase 5: CI/CD + AWS.** ECR (push images), ECS Fargate (api + worker services + a one-off migrate task), RDS Postgres, S3, Redis (ElastiCache or a small container, decide on cost), Secrets Manager, GitHub OIDC deploy role, `deploy.yml`, `COST.md` with teardown commands.
+   - Needs from the owner: an AWS account + AWS CLI configured. **Stop and ask before creating anything billable.**
+3. Phase 3 (payments, optional) whenever wanted.
 
 ## Pending verification (future phases)
-- Native bcrypt prebuild inside `node:22-alpine` (musl) — Phase 4.
-- Docker image-size before/after — Phase 4.
-- "Deployed on AWS" / uptime / cost — Phase 5.
+- "Deployed on AWS" / uptime / cost: Phase 5.
+- Image vulnerability scan (Trivy or ECR scanning): Phase 5.

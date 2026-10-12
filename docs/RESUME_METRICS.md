@@ -75,11 +75,6 @@ The atomic credit ledger holds under heavy contention — no overspend, no drift
 
 ---
 
-## Numbers you have NOT earned yet (do not claim until the phase is done)
-- Docker image size reduction — needs Phase 4 (multi-stage build; measure before/after).
-
----
-
 ## 6. Async job pipeline (Phase 2): queue → worker → storage, correct under load
 
 A real background pipeline: `POST /generate` reserves credits + enqueues (BullMQ/Redis), a separate worker calls the provider, uploads to S3/MinIO, records the asset, and keeps the credit ledger exactly right. Measured with the stub provider at **0 ms delay**, so these numbers are OUR overhead (queue + Postgres + S3 round-trips), not AI speed.
@@ -101,7 +96,30 @@ Correctness properties verified by tests (real Postgres + Redis + S3, not mocks)
 **Reproduce:** `cd api && npm run bench:pipeline` (needs the compose infra up) → `bench/pipeline-results.json`; correctness in `npm test` (`generation.test.ts`, `worker.test.ts`).
 **Resume line (honest):** "Built an async image-generation pipeline (BullMQ/Redis worker + S3) with a reserve/refund credit ledger that stays correct under concurrency — exactly-once refunds guarded by both application logic and a Postgres partial-unique index, verified with a 200-job pipeline and parallel-request tests showing zero overspend and zero ledger drift."
 
-## Numbers you have NOT earned yet (still)
-- Docker image size reduction — needs Phase 4 (multi-stage build; measure before/after).
+---
+
+## 7. Docker (Phase 4): multi-stage images, 69% smaller, non-root, one-command stack
+
+| Image | On disk | Compressed (registry/pull) |
+|---|---|---|
+| api, naive single-stage | 1.11 GB | 300 MB |
+| api, multi-stage + pruned (shipped) | **346 MB** | **79 MB** |
+| web, nginx-unprivileged + static build | **92 MB** | 26 MB |
+
+- api image **69% smaller on disk / 74% smaller compressed** than the naive build. The `node:22-alpine` base alone is 238 MB, so the app layer is ~108 MB.
+- **8-service compose stack** (postgres, redis, minio, minio-init, migrate, api, worker, web) up with one command. Migrations run in a one-off container that api/worker wait for.
+- All app containers **non-root** (uid 1000 / 101), tini as PID 1, graceful SIGTERM shutdown (exit 0, not 137).
+- CI builds all images (buildx + layer cache) and runs a full-stack smoke test on every PR.
+
+**Reproduce:**
+```
+docker build -f api/Dockerfile.naive -t ams-api:naive api
+docker compose build && docker images | grep -E "ai-media-studio|ams-api"
+docker image inspect <image> --format '{{.Size}}'   # compressed size
+docker compose up -d --build && ./scripts/smoke.sh
+```
+**Resume line (honest):** "Containerized a 4-process app (API, BullMQ worker, migrations, nginx SPA) with multi-stage Docker builds, cutting the API image from 1.11 GB to 346 MB (−69%); non-root containers, graceful shutdown, and a CI pipeline that builds the images and smoke-tests the full docker-compose stack on every PR."
+
+## Numbers you have NOT earned yet (do not claim until the phase is done)
 - "Deployed on AWS", uptime, cost — needs Phase 5.
 - Any user/traffic/revenue figure — this is a portfolio project; inventing these is the fastest way to fail an interview.

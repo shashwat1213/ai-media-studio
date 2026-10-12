@@ -6,14 +6,23 @@ Full spec: [`specs/00_PROJECT_BASE.md`](specs/00_PROJECT_BASE.md). Decision log:
 ## Stack
 - **api/** — Express 5 + TypeScript (strict) + Prisma (PostgreSQL) + Zod, JWT httpOnly-cookie auth, atomic credit ledger, **BullMQ job queue, S3/MinIO storage, OpenRouter image generation (free stub mode by default)**
 - **web/** — React 19 + Vite + Tailwind v4 + shadcn/ui + TanStack Query + React Router + React Hook Form/Zod
-- **infra** — docker-compose (Postgres, Redis, MinIO) · GitHub Actions CI
+- **infra** — multi-stage Docker images (api/worker, migrator, nginx web), docker-compose (8 services), GitHub Actions CI (tests + image build + compose smoke test)
 
-## Run locally
+## Run with Docker (everything, one command)
+Requires Docker with the buildx plugin.
+
+```bash
+docker compose up -d --build         # postgres, redis, minio, migrate, api, worker, web
+open http://localhost:8080           # the app
+./scripts/smoke.sh                   # end-to-end check through the containers
+```
+
+## Run natively (dev loop)
 Requires Node 22+ and Docker.
 
 ```bash
 cp .env.example .env && cp api/.env.example api/.env && cp web/.env.example web/.env
-docker compose up -d                 # postgres :5433, redis :6379, minio/Silo :9000 (console :9001)
+docker compose up -d postgres redis minio minio-init   # infra only: postgres :5433, redis :6379, minio :9000 (console :9001)
 
 cd api && npm install
 npx prisma migrate dev               # create tables
@@ -46,5 +55,5 @@ cd web && npm run typecheck && npm run lint && npm run build && npm run size
 - [x] Observability + benchmarks (pino, Prometheus, autocannon, coverage, bundle budget)
 - [x] Phase 2 — generation + jobs (BullMQ worker, S3/MinIO, OpenRouter, gallery UI)
 - [ ] Phase 3 — payments (optional)
-- [ ] Phase 4 — Dockerize fully
+- [x] Phase 4 — Dockerize fully (api image 1.11 GB → 346 MB, non-root, compose + CI smoke test)
 - [ ] Phase 5 — CI/CD + AWS

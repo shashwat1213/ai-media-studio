@@ -1,0 +1,61 @@
+# Rendered at container start by the nginx image's envsubst step:
+#   /etc/nginx/templates/*.template -> /etc/nginx/conf.d/*  (only ${VARS} that are set get replaced)
+#
+# nginx gotcha: `add_header` in a location REPLACES (doesn't add to) add_header from the server
+# block. So every location that sets its own header re-declares the security headers below.
+
+server {
+    listen 8080;
+    server_name _;
+    root /usr/share/nginx/html;
+
+    # Don't advertise the nginx version.
+    server_tokens off;
+
+    # Compress text assets on the fly (images/PNGs are already compressed).
+    gzip on;
+    gzip_types text/plain text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+
+    # Container healthcheck: answered by nginx itself, no upstream involved.
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # Same-origin API: the browser calls /api/*, nginx forwards to the api container and strips
+    # the /api prefix (trailing slash on proxy_pass). Same-origin = no CORS, cookies just work.
+    # Mirrors the Vite dev proxy, so dev and prod behave the same. (The api sets its own
+    # security headers via helmet, so none are added here.)
+    location /api/ {
+        proxy_pass ${API_UPSTREAM}/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Request-Id $request_id;
+        client_max_body_size 1m;
+        proxy_read_timeout 30s;
+    }
+
+    # Vite puts content hashes in asset filenames (index-Ca3ROPtM.js). A changed file gets a new
+    # name, so these can be cached "forever" by browsers and CDNs.
+    # (Only add_header, not `expires 1y`: `expires` emits its own Cache-Control -> duplicate header.)
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        try_files $uri =404;
+    }
+
+    # SPA fallback: /gallery, /generate... don't exist as files; React Router handles them.
+    # index.html must NEVER be cached, or users keep loading old JS after a deploy.
+    location / {
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        try_files $uri $uri/ /index.html;
+    }
+}

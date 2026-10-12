@@ -1,12 +1,35 @@
-# Local development infrastructure.
-# Phase 0: only the stateful services (postgres, redis, minio).
-# api / worker / web containers get added in Phase 4 (Dockerize fully).
+# AI Media Studio — full local stack.  Spec: specs/05_dockerize_spec.md
+#
+#   docker compose up -d --build     # everything: infra + migrate + api + worker + web
+#   open http://localhost:8080       # the app (nginx serves the SPA and proxies /api)
+#   docker compose up -d postgres redis minio minio-init   # infra only (for `npm run dev`)
 #
 # Inside this compose network, services reach each other by SERVICE NAME
-# (e.g. the api will use host "postgres", not "localhost") — Docker runs an
-# internal DNS server that resolves service names to container IPs.
+# (the api uses host "postgres", not "localhost"). Docker runs an internal DNS server that
+# resolves service names to container IPs. `localhost` inside a container = that container.
 
 name: ai-media-studio
+
+# Shared by api, worker and migrate (YAML anchor = write it once).
+# Containers get config from env vars at RUN time; nothing is baked into the images.
+x-app-env: &app-env
+  NODE_ENV: production
+  DATABASE_URL: postgresql://${POSTGRES_USER:-studio}:${POSTGRES_PASSWORD:-studio}@postgres:5432/${POSTGRES_DB:-ai_media_studio}?schema=public
+  REDIS_URL: redis://redis:6379
+  # The server talks to MinIO over the compose network...
+  S3_ENDPOINT: http://minio:9000
+  # ...but presigned URLs go to the BROWSER, which reaches MinIO on the host port.
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+  S3_BUCKET: ${S3_BUCKET:-ai-media-assets}
+  S3_REGION: us-east-1
+  S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+  S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+  S3_FORCE_PATH_STYLE: "true"
+  AI_PROVIDER: ${AI_PROVIDER:-stub}
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  # Local-only defaults. Real deployments inject these from AWS Secrets Manager (Phase 5).
+  METRICS_TOKEN: ${METRICS_TOKEN:-local-metrics-token-change-me}
 
 services:
   postgres:
@@ -24,6 +47,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
 
   redis:
     image: redis:7.4-alpine
@@ -37,13 +61,12 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
 
   # S3-compatible object storage for local dev (prod uses real AWS S3).
   # NOTE: official minio/minio + minio/mc images were DELETED from Docker Hub
   # (Sept 2026; MinIO community edition is now source-only). We use Silo, the
-  # community-maintained MinIO fork: same S3 API, same MINIO_* env vars, same
-  # `server /data --console-address` command, bundles the `mc` client.
-  # Service keeps the name "minio" because that's the role it plays.
+  # community-maintained MinIO fork: same S3 API, same MINIO_* env vars.
   minio:
     image: pgsty/silo:RELEASE.2026-09-16T00-00-00Z
     command: ["server", "/data", "--console-address", ":9001"]
@@ -51,20 +74,19 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
-      - "9000:9000"   # S3 API (what the AWS SDK talks to)
+      - "9000:9000"   # S3 API (what the AWS SDK + presigned URLs talk to)
       - "9001:9001"   # web console — open http://localhost:9001 to browse uploaded files
     volumes:
       - miniodata:/data
     healthcheck:
-      # Liveness route kept from MinIO; curl is bundled in the image.
       test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
       interval: 5s
       timeout: 3s
       retries: 10
       start_period: 5s
+    restart: unless-stopped
 
   # One-shot helper: creates the assets bucket, then exits.
-  # Reuses the same Silo image (it ships `mc`) — one less image to pull.
   minio-init:
     image: pgsty/silo:RELEASE.2026-09-16T00-00-00Z
     depends_on:
@@ -81,6 +103,76 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
       S3_BUCKET: ${S3_BUCKET:-ai-media-assets}
     restart: "no"
+
+  # ---- Phase 4: the application ----
+
+  # One-off: apply DB migrations, then exit 0. api + worker only start after it SUCCEEDED,
+  # so code never runs against an old schema. (ECS: same idea as a one-off task before deploy.)
+  migrate:
+    build:
+      context: ./api
+      target: migrator
+    image: ai-media-studio-migrator:local
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-studio}:${POSTGRES_PASSWORD:-studio}@postgres:5432/${POSTGRES_DB:-ai_media_studio}?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: ./api
+    image: ai-media-studio-api:local
+    # No `init: true`: the image already runs tini as PID 1 (two tinis = a warning, no benefit).
+    environment:
+      <<: *app-env
+      PORT: "4000"
+      # Same-origin through nginx (http://localhost:8080), so CORS only matters for direct calls.
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:8080}
+      JWT_SECRET: ${JWT_SECRET:-local-docker-jwt-secret-change-me-0123456789}
+      # Cookies over plain http://localhost: secureCookies is tied to NODE_ENV=production,
+      # and browsers treat http://localhost as a secure context, so Secure cookies still work.
+    ports:
+      - "4000:4000"   # optional: direct access for curl/debugging; the browser goes through web
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 15s
+
+  # SAME image as the api, different command: one codebase, one build, two processes.
+  worker:
+    image: ai-media-studio-api:local
+    command: ["node", "dist/worker.js"]
+    environment:
+      <<: *app-env
+      WORKER_PORT: "4001"
+      HEALTH_PORT: "4001"        # the image's HEALTHCHECK reads this
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+    depends_on:
+      api:
+        condition: service_healthy # api's build creates the image; also = migrations done
+    restart: unless-stopped
+    # Give in-flight jobs time to finish on `docker compose stop` (graceful shutdown).
+    stop_grace_period: 35s
+
+  web:
+    build:
+      context: ./web
+    image: ai-media-studio-web:local
+    environment:
+      API_UPSTREAM: http://api:4000
+    ports:
+      - "8080:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   pgdata:

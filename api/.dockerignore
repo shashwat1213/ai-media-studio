@@ -1,10 +1,17 @@
+# Everything NOT listed here is sent to the Docker daemon as build context.
+# Smaller context = faster builds, and secrets (.env) can never end up in an image layer.
 .git
 node_modules
 dist
 coverage
+bench
+*.log
 .env
 .env.*
 !.env.example
-*.log
 Dockerfile*
 .dockerignore
+**/*.test.ts
+test
+vitest.config.ts
+eslint.config.mjs
