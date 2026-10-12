@@ -1,0 +1,58 @@
+name: CI
+
+# Runs on every push and every PR. CD (deploy to AWS) comes in Phase 5.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel an older run of the same branch when a new commit lands.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read   # least privilege: CI only needs to read the code
+
+jobs:
+  api:
+    name: API — typecheck, lint, test, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    env:
+      # Dummy URL: Phase 0 tests stub the DB. Real Postgres/Redis service
+      # containers are added here once integration tests exist (Phase 1).
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci                 # clean, lockfile-exact install (also runs prisma generate)
+      - run: npx prisma validate
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  web:
+    name: Web — typecheck, lint, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run build

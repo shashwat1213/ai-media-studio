@@ -1,0 +1,20 @@
+// Prisma schema — single source of truth for the database structure.
+// Phase 0 keeps only a minimal User; the full model lands in Phase 1.
+
+generator client {
+  provider = "prisma-client-js"
+  // linux-musl: needed later so the client works inside node:22-alpine images
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+}

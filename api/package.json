@@ -1,0 +1,45 @@
+{
+  "name": "ai-media-studio-api",
+  "version": "1.0.0",
+  "description": "AI Media Studio API",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch --env-file=.env src/server.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "postinstall": "prisma generate"
+  },
+  "type": "module",
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "express": "^5.3.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/cookie-parser": "^1.4.10",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.20.5",
+    "@types/supertest": "^7.2.1",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "prisma": "^6.19.3",
+    "supertest": "^7.3.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.71.1",
+    "vitest": "^5.0.3"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  }
+}
