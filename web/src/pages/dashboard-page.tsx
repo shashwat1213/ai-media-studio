@@ -8,6 +8,7 @@ import { useCredits } from '@/features/credits/use-credits';
 import { TransactionsTable } from '@/features/credits/transactions-table';
 import { useAssets } from '@/features/generation/use-generation';
 import { useSpotlight } from '@/lib/use-spotlight';
+import { AssetMedia } from '@/features/generation/asset-media';
 
 const fade = (i: number) => ({ initial: { opacity: 0, y: 12 }, animate: { opacity: 1, y: 0 }, transition: { delay: i * 0.05 } });
 
@@ -37,13 +38,13 @@ export function DashboardPage() {
               <div>
                 <div className="inline-flex items-center gap-1.5 rounded-full bg-primary/15 px-2.5 py-1 text-xs font-medium text-primary ring-1 ring-primary/25">
                   <Sparkles className="size-3.5" />
-                  Text to image
+                  Image + Motion
                 </div>
                 <h2 className="mt-4 max-w-md text-2xl font-semibold tracking-tight sm:text-3xl">Turn your next idea into an image.</h2>
-                <p className="mt-2 max-w-md text-sm text-muted-foreground">Pick a model, choose a shape, describe the scene. From 2 credits.</p>
+                <p className="mt-2 max-w-md text-sm text-muted-foreground">Describe a scene and get an image, then animate it with a cinematic camera move.</p>
               </div>
               <Button asChild size="lg" className="btn-glow w-fit rounded-xl">
-                <Link to="/generate">
+                <Link to="/studio">
                   <Wand2 />
                   Start creating
                   <ArrowRight />
@@ -74,7 +75,7 @@ export function DashboardPage() {
                 {recentItems.length}
                 {recent.hasNextPage ? '+' : ''}
               </p>
-              <p className="text-xs text-muted-foreground">images</p>
+              <p className="text-xs text-muted-foreground">creations</p>
             </div>
             <div className="rounded-2xl border bg-card p-5">
               <TrendingDown className="size-4 text-muted-foreground" />
@@ -104,7 +105,7 @@ export function DashboardPage() {
           </div>
         ) : recentItems.length === 0 ? (
           <Link
-            to="/generate"
+            to="/studio"
             className="flex items-center justify-center gap-3 rounded-2xl border border-dashed border-white/10 py-12 text-sm text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
           >
             <Sparkles className="size-4 text-primary" />
@@ -115,7 +116,9 @@ export function DashboardPage() {
             {recentItems.slice(0, 8).map((a, i) => (
               <motion.div key={a.id} initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.1 + i * 0.04 }}>
                 <Link to="/gallery" className="group block overflow-hidden rounded-2xl bg-card ring-1 ring-white/[0.07]" title={a.prompt}>
-                  <img src={a.url} alt={a.prompt ?? 'Generated image'} loading="lazy" className="aspect-square w-full object-cover transition duration-500 group-hover:scale-105" />
+                  <span className="block aspect-square">
+                    <AssetMedia asset={a} className="size-full object-cover transition duration-500 group-hover:scale-105" />
+                  </span>
                 </Link>
               </motion.div>
             ))}

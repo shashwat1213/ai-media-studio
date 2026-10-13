@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react';
-import { BrowserRouter, Route, Routes } from 'react-router';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router';
 import { Loader2 } from 'lucide-react';
 import { GuestOnly, RequireAuth } from '@/features/auth/route-guards';
 
@@ -7,7 +7,7 @@ import { GuestOnly, RequireAuth } from '@/features/auth/route-guards';
 // when that route is visited. The login page doesn't ship dashboard code.
 const AppShell = lazy(() => import('@/components/layout/app-shell').then((m) => ({ default: m.AppShell })));
 const DashboardPage = lazy(() => import('@/pages/dashboard-page').then((m) => ({ default: m.DashboardPage })));
-const GeneratePage = lazy(() => import('@/pages/generate-page').then((m) => ({ default: m.GeneratePage })));
+const StudioPage = lazy(() => import('@/pages/studio-page').then((m) => ({ default: m.StudioPage })));
 const GalleryPage = lazy(() => import('@/pages/gallery-page').then((m) => ({ default: m.GalleryPage })));
 const LoginPage = lazy(() => import('@/pages/login-page').then((m) => ({ default: m.LoginPage })));
 const RegisterPage = lazy(() => import('@/pages/register-page').then((m) => ({ default: m.RegisterPage })));
@@ -36,7 +36,9 @@ export default function App() {
           <Route element={<RequireAuth landing={<LandingPage />} />}>
             <Route element={<AppShell />}>
               <Route index element={<DashboardPage />} />
-              <Route path="/generate" element={<GeneratePage />} />
+              <Route path="/studio" element={<StudioPage />} />
+              {/* Old link (bookmarks, README): keep it working. */}
+              <Route path="/generate" element={<Navigate to="/studio" replace />} />
               <Route path="/gallery" element={<GalleryPage />} />
             </Route>
           </Route>

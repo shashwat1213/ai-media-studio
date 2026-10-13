@@ -17,7 +17,7 @@ import { useLogout, useMe } from '@/features/auth/use-auth';
 
 const nav = [
   { to: '/', label: 'Home', icon: LayoutDashboard },
-  { to: '/generate', label: 'Create', icon: Wand2 },
+  { to: '/studio', label: 'Studio', icon: Wand2 },
   { to: '/gallery', label: 'Gallery', icon: Images },
 ];
 
@@ -74,7 +74,7 @@ export function AppShell() {
 
           <div className="ml-auto flex items-center gap-2 md:ml-0">
             <Button asChild size="sm" className="btn-glow hidden rounded-xl sm:inline-flex">
-              <NavLink to="/generate">
+              <NavLink to="/studio">
                 <Plus />
                 Create
               </NavLink>

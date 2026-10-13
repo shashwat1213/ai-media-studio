@@ -60,6 +60,7 @@ export interface Health {
 // ---- Phase 2: generation ----
 
 export type JobStatus = 'QUEUED' | 'PROCESSING' | 'DONE' | 'FAILED';
+export type JobKind = 'IMAGE' | 'MOTION';
 
 export interface ModelOption {
   id: string;
@@ -85,6 +86,9 @@ export interface Asset {
   bytes: number;
   width: number | null;
   height: number | null;
+  /** Videos only. */
+  durationMs: number | null;
+  kind: 'image' | 'video';
   createdAt: string;
   prompt?: string;
   model?: string;
@@ -93,6 +97,7 @@ export interface Asset {
 
 export interface Job {
   id: string;
+  kind: JobKind;
   prompt: string;
   model: string;
   aspectRatio: string;
@@ -104,6 +109,20 @@ export interface Job {
   startedAt: string | null;
   finishedAt: string | null;
   asset: Asset | null;
+  motion: { preset: string; durationS: number; sourceAssetId: string | null } | null;
+}
+
+export interface MotionPreset {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface MotionCatalog {
+  /** 'camera' = a camera move over a still image (not AI video). */
+  engine: 'camera';
+  presets: MotionPreset[];
+  durations: { seconds: number; credits: number }[];
 }
 
 export interface Page<T> {

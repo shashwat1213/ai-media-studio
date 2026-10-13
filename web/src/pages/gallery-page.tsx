@@ -1,16 +1,27 @@
 import { useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { motion } from 'framer-motion';
-import { Images, Loader2, Plus } from 'lucide-react';
+import { Clapperboard, ImageIcon, Images, Loader2, Plus } from 'lucide-react';
+import { cn } from 'cn';
 import type { Asset } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { AssetLightbox } from '@/features/generation/asset-lightbox';
 import { useAssets, useModels } from '@/features/generation/use-generation';
 import { aspectClass } from '@/features/generation/format';
+import { AssetMedia } from '@/features/generation/asset-media';
+
+const FILTERS = [
+  { id: 'all', label: 'All', icon: Images },
+  { id: 'image', label: 'Images', icon: ImageIcon },
+  { id: 'video', label: 'Videos', icon: Clapperboard },
+] as const;
+type Filter = (typeof FILTERS)[number]['id'];
 
 export function GalleryPage() {
-  const assets = useAssets(24);
+  const [params, setParams] = useSearchParams();
+  const filter: Filter = params.get('type') === 'image' ? 'image' : params.get('type') === 'video' ? 'video' : 'all';
+  const assets = useAssets(24, filter === 'all' ? undefined : filter);
   const models = useModels();
   const [index, setIndex] = useState<number | null>(null);
   const items = assets.data?.pages.flatMap((p) => p.items) ?? [];
@@ -22,15 +33,41 @@ export function GalleryPage() {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Gallery</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {items.length ? `${items.length}${assets.hasNextPage ? '+' : ''} images` : 'Every image you create lands here.'}
+            {items.length
+              ? `${items.length}${assets.hasNextPage ? '+' : ''} ${filter === 'video' ? 'videos' : filter === 'image' ? 'images' : 'creations'}`
+              : 'Everything you create lands here.'}
           </p>
         </div>
-        <Button asChild className="btn-glow rounded-xl">
-          <Link to="/generate">
-            <Plus />
-            New image
-          </Link>
-        </Button>
+        <div className="flex items-center gap-2">
+          <div role="tablist" aria-label="Filter" className="flex gap-0.5 rounded-xl bg-white/[0.03] p-1 ring-1 ring-white/[0.06]">
+            {FILTERS.map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={filter === id}
+                onClick={() => {
+                  setIndex(null);
+                  setParams(id === 'all' ? {} : { type: id });
+                }}
+                className={cn(
+                  'relative inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition',
+                  filter === id ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {filter === id && <motion.span layoutId="gallery-filter" className="absolute inset-0 rounded-lg bg-white/[0.08]" transition={{ type: 'spring', stiffness: 500, damping: 38 }} />}
+                <Icon className="relative size-3.5" />
+                <span className="relative">{label}</span>
+              </button>
+            ))}
+          </div>
+          <Button asChild className="btn-glow rounded-xl">
+            <Link to="/studio">
+              <Plus />
+              <span className="hidden sm:inline">Create</span>
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {assets.isLoading ? (
@@ -49,11 +86,13 @@ export function GalleryPage() {
             <Images className="size-5" />
           </div>
           <div>
-            <p className="font-medium">No images yet</p>
-            <p className="text-sm text-muted-foreground">Generate your first one and it will appear here.</p>
+            <p className="font-medium">{filter === 'video' ? 'No videos yet' : 'Nothing here yet'}</p>
+            <p className="text-sm text-muted-foreground">
+              {filter === 'video' ? 'Open any image and press Animate.' : 'Create your first image and it will appear here.'}
+            </p>
           </div>
           <Button asChild className="btn-glow rounded-xl">
-            <Link to="/generate">Start creating</Link>
+            <Link to={filter === 'video' ? '/studio?tool=motion' : '/studio'}>Start creating</Link>
           </Button>
         </div>
       ) : (
@@ -71,12 +110,7 @@ export function GalleryPage() {
                 className={`group relative mb-3 block w-full break-inside-avoid overflow-hidden rounded-2xl bg-card ring-1 ring-white/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${aspectClass[a.aspectRatio ?? '1:1'] ?? 'aspect-square'}`}
                 aria-label={`Open: ${a.prompt}`}
               >
-                <img
-                  src={a.url}
-                  alt={a.prompt ?? 'Generated image'}
-                  loading="lazy"
-                  className="size-full object-cover transition duration-500 group-hover:scale-105 group-hover:brightness-110"
-                />
+                <AssetMedia asset={a} className="size-full object-cover transition duration-500 group-hover:scale-105 group-hover:brightness-110" />
                 <span className="absolute inset-x-0 bottom-0 translate-y-2 bg-gradient-to-t from-black/85 to-transparent p-3 pt-10 text-left text-xs leading-snug text-white opacity-0 transition duration-200 group-hover:translate-y-0 group-hover:opacity-100 group-focus-visible:translate-y-0 group-focus-visible:opacity-100">
                   <span className="line-clamp-2">{a.prompt}</span>
                 </span>

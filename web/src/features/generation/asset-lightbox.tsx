@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ChevronLeft, ChevronRight, Copy, Download, Trash2, Wand2, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Clapperboard, Copy, Download, Trash2, Wand2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Asset, ModelOption } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -26,12 +26,14 @@ interface Props {
   /** Gallery navigation (← / → keys too). Omit to hide the arrows. */
   onPrev?: () => void;
   onNext?: () => void;
-  /** Put this prompt back into the composer. Default: go to /generate with it. */
+  /** Put this prompt back into the composer. Default: go to the Studio with it. */
   onRemix?: (prompt: string) => void;
+  /** Send this image to the Motion tool. Default: navigate there. */
+  onAnimate?: (assetId: string) => void;
 }
 
 /** Full-screen viewer: image on black, details panel, keyboard navigation. */
-export function AssetLightbox({ asset, models, onClose, onPrev, onNext, onRemix }: Props) {
+export function AssetLightbox({ asset, models, onClose, onPrev, onNext, onRemix, onAnimate }: Props) {
   const del = useDeleteAsset();
   const navigate = useNavigate();
   const [confirming, setConfirming] = useState(false);
@@ -55,9 +57,18 @@ export function AssetLightbox({ asset, models, onClose, onPrev, onNext, onRemix 
   function remix() {
     if (!asset?.prompt) return;
     if (onRemix) onRemix(asset.prompt);
-    else navigate('/generate', { state: { remix: asset.prompt } });
+    else navigate('/studio?tool=image', { state: { remix: asset.prompt } });
     onClose();
   }
+
+  function animate() {
+    if (!asset) return;
+    if (onAnimate) onAnimate(asset.id);
+    else navigate(`/studio?tool=motion&src=${asset.id}`);
+    onClose();
+  }
+
+  const video = asset?.kind === 'video';
 
   async function remove() {
     if (!asset) return;
@@ -82,16 +93,33 @@ export function AssetLightbox({ asset, models, onClose, onPrev, onNext, onRemix 
             <div className="grid max-h-[90vh] md:grid-cols-[1fr_320px]">
               <div className="relative flex min-h-[40vh] items-center justify-center bg-black">
                 <AnimatePresence mode="wait">
-                  <motion.img
-                    key={asset.id}
-                    src={asset.url}
-                    alt={asset.prompt ?? 'Generated image'}
-                    initial={{ opacity: 0, scale: 0.98 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className="max-h-[78vh] w-full object-contain"
-                  />
+                  {video ? (
+                    <motion.video
+                      key={asset.id}
+                      src={asset.url}
+                      aria-label={asset.prompt ?? 'Generated video'}
+                      controls
+                      autoPlay
+                      loop
+                      muted
+                      playsInline
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="max-h-[78vh] w-full object-contain"
+                    />
+                  ) : (
+                    <motion.img
+                      key={asset.id}
+                      src={asset.url}
+                      alt={asset.prompt ?? 'Generated image'}
+                      initial={{ opacity: 0, scale: 0.98 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="max-h-[78vh] w-full object-contain"
+                    />
+                  )}
                 </AnimatePresence>
                 {onPrev && (
                   <NavArrow side="left" onClick={onPrev} label="Previous image">
@@ -122,8 +150,10 @@ export function AssetLightbox({ asset, models, onClose, onPrev, onNext, onRemix 
                 </div>
 
                 <dl className="grid grid-cols-2 gap-y-2 text-xs">
-                  <dt className="text-muted-foreground">Model</dt>
-                  <dd className="text-right">{asset.model ? modelName(models, asset.model) : '—'}</dd>
+                  <dt className="text-muted-foreground">Type</dt>
+                  <dd className="text-right">{video ? `Video · ${Math.round((asset.durationMs ?? 0) / 1000)}s` : 'Image'}</dd>
+                  <dt className="text-muted-foreground">{video ? 'Engine' : 'Model'}</dt>
+                  <dd className="text-right">{video ? 'Camera motion' : asset.model ? modelName(models, asset.model) : '—'}</dd>
                   <dt className="text-muted-foreground">Aspect ratio</dt>
                   <dd className="text-right">{asset.aspectRatio ?? '—'}</dd>
                   {asset.width && asset.height && (
@@ -141,7 +171,13 @@ export function AssetLightbox({ asset, models, onClose, onPrev, onNext, onRemix 
                 </dl>
 
                 <div className="mt-auto grid gap-2">
-                  <Button className="btn-glow rounded-xl" onClick={remix}>
+                  {!video && (
+                    <Button className="btn-glow rounded-xl" onClick={animate}>
+                      <Clapperboard />
+                      Animate
+                    </Button>
+                  )}
+                  <Button variant={video ? 'default' : 'secondary'} className={video ? 'btn-glow rounded-xl' : 'rounded-xl'} onClick={remix}>
                     <Wand2 />
                     Remix prompt
                   </Button>
@@ -173,7 +209,7 @@ export function AssetLightbox({ asset, models, onClose, onPrev, onNext, onRemix 
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this image?</AlertDialogTitle>
             <AlertDialogDescription>
-              The file is removed from storage permanently. Credits are not refunded for completed generations.
+              The file is removed from storage permanently. Credits are not refunded for completed generations. Videos made from it are kept.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

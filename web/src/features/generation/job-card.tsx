@@ -1,7 +1,8 @@
 import { motion } from 'framer-motion';
-import { Download, ImageOff, Maximize2, RotateCcw, Wand2 } from 'lucide-react';
+import { Clapperboard, Download, ImageOff, Maximize2, RotateCcw, Wand2 } from 'lucide-react';
 import { cn } from 'cn';
 import type { Job, ModelOption } from '@/lib/api';
+import { AssetMedia } from './asset-media';
 import { aspectClass, duration, modelName } from './format';
 
 interface Props {
@@ -9,16 +10,21 @@ interface Props {
   models?: ModelOption[];
   onOpen?: (job: Job) => void;
   onRemix?: (prompt: string) => void;
+  /** Images only: send to the Motion tool. */
+  onAnimate?: (assetId: string) => void;
 }
 
 /**
  * One generation in the feed. While running: an animated shimmer "developing" placeholder with a
  * stage label. Done: the image with hover actions. Failed: the reason + the refund.
  */
-export function JobCard({ job, models, onOpen, onRemix }: Props) {
+export function JobCard({ job, models, onOpen, onRemix, onAnimate }: Props) {
   const running = job.status === 'QUEUED' || job.status === 'PROCESSING';
   const took = duration(job.startedAt ?? job.createdAt, job.finishedAt);
   const done = job.status === 'DONE' && job.asset;
+  const isMotion = job.kind === 'MOTION';
+  // Videos come out at the source image's ratio; the API stores it on the job too.
+  const label = isMotion ? `${presetName(job.motion?.preset)} · ${job.motion?.durationS ?? '?'}s` : `${modelName(models, job.model)} · ${job.aspectRatio}`;
 
   return (
     <motion.article
@@ -31,22 +37,28 @@ export function JobCard({ job, models, onOpen, onRemix }: Props) {
       <div className={cn('relative w-full', aspectClass[job.aspectRatio] ?? 'aspect-square')}>
         {done ? (
           <>
-            <motion.img
-              src={job.asset!.url}
-              alt={job.prompt}
-              loading="lazy"
+            <motion.div
               initial={{ opacity: 0, filter: 'blur(16px)', scale: 1.04 }}
               animate={{ opacity: 1, filter: 'blur(0px)', scale: 1 }}
               transition={{ duration: 0.7, ease: 'easeOut' }}
-              className="size-full cursor-zoom-in object-cover transition-transform duration-500 group-hover:scale-[1.03]"
+              className="size-full cursor-zoom-in"
               onClick={() => onOpen?.(job)}
-            />
+            >
+              <AssetMedia asset={{ ...job.asset!, prompt: job.prompt }} className="size-full object-cover transition-transform duration-500 group-hover:scale-[1.03]" />
+            </motion.div>
             {/* hover overlay */}
             <div className="pointer-events-none absolute inset-0 flex flex-col justify-between bg-gradient-to-t from-black/80 via-black/0 to-black/30 p-3 opacity-0 transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100">
               <div className="pointer-events-auto flex justify-end gap-1.5">
-                <IconBtn label="Remix this prompt" onClick={() => onRemix?.(job.prompt)}>
-                  <Wand2 />
-                </IconBtn>
+                {!isMotion && onAnimate && (
+                  <IconBtn label="Animate this image" onClick={() => onAnimate(job.asset!.id)}>
+                    <Clapperboard />
+                  </IconBtn>
+                )}
+                {!isMotion && (
+                  <IconBtn label="Remix this prompt" onClick={() => onRemix?.(job.prompt)}>
+                    <Wand2 />
+                  </IconBtn>
+                )}
                 <IconBtn label="Open" onClick={() => onOpen?.(job)}>
                   <Maximize2 />
                 </IconBtn>
@@ -64,7 +76,7 @@ export function JobCard({ job, models, onOpen, onRemix }: Props) {
               <span className="absolute inset-2 rounded-full bg-primary shadow-[0_0_24px_var(--glow)]" />
             </div>
             <p className="text-xs font-medium text-foreground/90">
-              {job.status === 'QUEUED' ? 'In queue…' : job.attempts > 1 ? `Retrying · attempt ${job.attempts}` : 'Rendering…'}
+              {job.status === 'QUEUED' ? 'In queue…' : job.attempts > 1 ? `Retrying · attempt ${job.attempts}` : isMotion ? 'Rendering video…' : 'Rendering…'}
             </p>
             <p className="line-clamp-2 max-w-[90%] text-[11px] text-muted-foreground">{job.prompt}</p>
           </div>
@@ -83,15 +95,28 @@ export function JobCard({ job, models, onOpen, onRemix }: Props) {
       </div>
 
       <div className="flex items-center justify-between gap-2 px-3 py-2 text-[11px] text-muted-foreground">
-        <span className="truncate">
-          {modelName(models, job.model)} · {job.aspectRatio}
-          {took && job.status === 'DONE' ? ` · ${took}` : ''}
+        <span className="flex min-w-0 items-center gap-1.5">
+          {isMotion && <Clapperboard className="size-3 shrink-0 text-primary" />}
+          <span className="truncate">
+            {label}
+            {took && job.status === 'DONE' ? ` · ${took}` : ''}
+          </span>
         </span>
         <span className={cn('shrink-0 tabular-nums', job.status === 'FAILED' && 'line-through')}>−{job.creditsCost}</span>
       </div>
     </motion.article>
   );
 }
+
+const PRESET_NAMES: Record<string, string> = {
+  'push-in': 'Push in',
+  'pull-out': 'Pull out',
+  'pan-right': 'Pan right',
+  'pan-left': 'Pan left',
+  'crane-up': 'Crane up',
+  drift: 'Drift',
+};
+const presetName = (id?: string) => (id ? (PRESET_NAMES[id] ?? id) : 'Motion');
 
 function IconBtn({ label, onClick, children }: { label: string; onClick?: () => void; children: React.ReactNode }) {
   return (

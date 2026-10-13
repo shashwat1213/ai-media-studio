@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { motion } from 'framer-motion';
-import { ArrowRight, Coins, Gauge, Layers, RotateCcw, ShieldCheck, Sparkles, Zap } from 'lucide-react';
+import { ArrowRight, Clapperboard, Coins, Layers, RotateCcw, ShieldCheck, Sparkles, Zap } from 'lucide-react';
 import { Logo } from '@/components/brand/logo';
 import { Aurora } from '@/components/fx/aurora';
 import { Button } from '@/components/ui/button';
@@ -31,9 +31,9 @@ const FEATURES = [
   { icon: Zap, title: 'Fast, in the background', body: 'Jobs run on a queue + worker. Click generate and keep working; images appear the moment they finish.' },
   { icon: Coins, title: 'Pay per image', body: 'Credits, not subscriptions. Each model shows its price up front, and you start with 50 free.' },
   { icon: RotateCcw, title: 'Automatic refunds', body: "If a generation fails, your credits come back. Exactly once, guaranteed by the database." },
-  { icon: Layers, title: 'Your private gallery', body: 'Every image is stored privately and served through short-lived signed links.' },
+  { icon: Clapperboard, title: 'Images that move', body: 'Turn any image into a short cinematic clip: push in, pan, crane up or drift. Preview the move live before rendering.' },
+  { icon: Layers, title: 'Your private gallery', body: 'Every image and video is stored privately and served through short-lived signed links.' },
   { icon: ShieldCheck, title: 'Safe by design', body: 'httpOnly sessions, rate limits, and per-user isolation on every request.' },
-  { icon: Gauge, title: 'Built to measure', body: 'Structured logs, Prometheus metrics, and load-tested credit accounting.' },
 ];
 
 function useTypewriter(lines: string[], speed = 38, hold = 1800) {

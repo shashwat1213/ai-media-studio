@@ -1,8 +1,9 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { api, type Asset, type Job, type ModelCatalog, type Page } from '@/lib/api';
+import { api, type Asset, type Job, type JobKind, type ModelCatalog, type MotionCatalog, type Page } from '@/lib/api';
 import { meKey } from '@/features/auth/use-auth';
 
 export const modelsKey = ['generate', 'models'] as const;
+export const motionPresetsKey = ['motion', 'presets'] as const;
 export const jobsKey = ['jobs'] as const;
 export const jobKey = (id: string) => ['jobs', id] as const;
 export const assetsKey = ['assets'] as const;
@@ -23,12 +24,12 @@ export function useModels() {
  * has finished, polling stops on its own (refetchInterval returns false). No websocket needed:
  * a status that changes a handful of times per job is exactly what short polling is good for.
  */
-export function useRecentJobs(limit = 10) {
+export function useRecentJobs(limit = 10, kind?: JobKind) {
   const qc = useQueryClient();
   return useQuery({
-    queryKey: [...jobsKey, 'recent', limit],
+    queryKey: [...jobsKey, 'recent', limit, kind ?? 'all'],
     queryFn: async () => {
-      const page = await api<Page<Job>>(`/jobs?limit=${limit}`);
+      const page = await api<Page<Job>>(`/jobs?limit=${limit}${kind ? `&kind=${kind}` : ''}`);
       syncAfterFinish(qc, page.items);
       return page;
     },
@@ -99,12 +100,12 @@ export function useGenerate() {
   });
 }
 
-/** Gallery with "Load more" (cursor pagination). */
-export function useAssets(pageSize = 24) {
+/** Gallery with "Load more" (cursor pagination). `type` filters images vs videos server-side. */
+export function useAssets(pageSize = 24, type?: Asset['kind']) {
   return useInfiniteQuery({
-    queryKey: [...assetsKey, pageSize],
+    queryKey: [...assetsKey, pageSize, type ?? 'all'],
     queryFn: ({ pageParam }) =>
-      api<Page<Asset>>(`/assets?limit=${pageSize}${pageParam ? `&cursor=${pageParam}` : ''}`),
+      api<Page<Asset>>(`/assets?limit=${pageSize}${type ? `&type=${type}` : ''}${pageParam ? `&cursor=${pageParam}` : ''}`),
     initialPageParam: '' as string,
     getNextPageParam: (last) => last.nextCursor ?? undefined,
     // Signed URLs expire after 15 min; refresh well before that if the tab stays open.
@@ -119,6 +120,39 @@ export function useDeleteAsset() {
     mutationFn: (id: string) => api<void>(`/assets/${id}`, { method: 'DELETE' }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: assetsKey });
+      void qc.invalidateQueries({ queryKey: jobsKey });
+    },
+  });
+}
+
+/** Camera presets + prices. Static per deploy: cache for the session. */
+export function useMotionPresets() {
+  return useQuery({
+    queryKey: motionPresetsKey,
+    queryFn: () => api<MotionCatalog>('/motion/presets'),
+    staleTime: Infinity,
+  });
+}
+
+export interface AnimateInput {
+  sourceAssetId: string;
+  preset: string;
+  durationS: number;
+}
+
+/** Image -> short camera-move video. Same idempotency + cache rules as useGenerate. */
+export function useAnimate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: AnimateInput) =>
+      api<{ job: Job }>('/motion', {
+        method: 'POST',
+        body: JSON.stringify(input),
+        headers: { 'Idempotency-Key': crypto.randomUUID() },
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: meKey });
+      void qc.invalidateQueries({ queryKey: ['credits'] });
       void qc.invalidateQueries({ queryKey: jobsKey });
     },
   });
