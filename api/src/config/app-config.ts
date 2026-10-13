@@ -4,6 +4,8 @@ import { providerMode } from '../modules/generation/providers/index.js';
 /** The subset of configuration the Express app needs. Tests build this directly. */
 export interface AppConfig {
   corsOrigin: string;
+  /** Reverse proxies in front of the API (Express `trust proxy`). Default 1. */
+  trustProxyHops?: number;
   jwtSecret: string;
   jwtTtlDays: number;
   bcryptCost: number;
@@ -20,6 +22,7 @@ export interface AppConfig {
 export function toAppConfig(env: Env): AppConfig {
   return {
     corsOrigin: env.CORS_ORIGIN,
+    trustProxyHops: env.TRUST_PROXY_HOPS,
     jwtSecret: env.JWT_SECRET,
     jwtTtlDays: env.JWT_TTL_DAYS,
     bcryptCost: env.BCRYPT_COST,

@@ -6,7 +6,8 @@ Full spec: [`specs/00_PROJECT_BASE.md`](specs/00_PROJECT_BASE.md). Decision log:
 ## Stack
 - **api/** — Express 5 + TypeScript (strict) + Prisma (PostgreSQL) + Zod, JWT httpOnly-cookie auth, atomic credit ledger, **BullMQ job queue, S3/MinIO storage, OpenRouter image generation (free stub mode by default)**
 - **web/** — React 19 + Vite + Tailwind v4 + shadcn/ui + TanStack Query + React Router + React Hook Form/Zod
-- **infra** — multi-stage Docker images (api/worker, migrator, nginx web), docker-compose (8 services), GitHub Actions CI (tests + image build + compose smoke test)
+- **infra** — multi-stage Docker images (api/worker, migrator, nginx web), docker-compose (8 services), GitHub Actions CI (tests + image build + Trivy scan + compose smoke test)
+- **aws/** (Phase 5) — Terraform (`infra/`): ECS Fargate, RDS Postgres, S3, ECR, CloudFront → internal ALB, SSM secrets, GitHub OIDC; `deploy.yml` CD pipeline; pause/resume scripts. Costs: [`COST.md`](COST.md). Setup: [`infra/README.md`](infra/README.md)
 
 ## Run with Docker (everything, one command)
 Requires Docker with the buildx plugin.
@@ -56,4 +57,4 @@ cd web && npm run typecheck && npm run lint && npm run build && npm run size
 - [x] Phase 2 — generation + jobs (BullMQ worker, S3/MinIO, OpenRouter, gallery UI)
 - [ ] Phase 3 — payments (optional)
 - [x] Phase 4 — Dockerize fully (api image 1.11 GB → 346 MB, non-root, compose + CI smoke test)
-- [ ] Phase 5 — CI/CD + AWS
+- [~] Phase 5 — CI/CD + AWS: Terraform, deploy pipeline, scans and cost docs done and verified offline; **not yet applied to an AWS account**

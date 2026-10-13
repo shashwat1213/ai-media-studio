@@ -1,0 +1,129 @@
+name: Deploy
+
+# CD: after CI passes on main, build the images, push them to ECR (tagged with the git SHA),
+# run DB migrations as a one-off ECS task, then roll the ECS services to the new images.
+#
+# Auth: GitHub OIDC -> IAM role (no AWS keys stored in GitHub). The role only trusts jobs running
+# in the `production` environment of this repo. Until the AWS infrastructure exists (see
+# infra/README.md) the AWS_DEPLOY_ROLE_ARN variable is unset and this workflow skips itself.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: # manual (re)deploy of the current main
+
+# Never run two deploys at once; a newer one waits instead of cancelling a half-done rollout.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # lets the job request a GitHub OIDC token for AWS
+
+jobs:
+  deploy:
+    name: Build, push, migrate, roll out
+    # Only for a GREEN CI run of a push to main (not PRs), and only once AWS is set up.
+    if: >-
+      vars.AWS_DEPLOY_ROLE_ARN != '' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment:
+      name: production
+      url: ${{ steps.cfg.outputs.app_url }}
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-2' }}
+      # Deploy exactly the commit CI tested (workflow_run), or main's head (manual run).
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      # Third-party actions pinned to commit SHAs: a moved tag can't inject code into a job that
+      # holds AWS credentials.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SHA }}
+
+      - name: AWS credentials (OIDC, 1-hour session)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gh-deploy-${{ github.run_id }}
+
+      - name: Read deploy config (written by Terraform)
+        id: cfg
+        run: |
+          CONFIG=$(aws ssm get-parameter --name /ams/prod/DEPLOY_CONFIG --query Parameter.Value --output text)
+          {
+            echo "api=$(jq -r .repos.api <<<"$CONFIG")"
+            echo "migrator=$(jq -r .repos.migrator <<<"$CONFIG")"
+            echo "web=$(jq -r .repos.web <<<"$CONFIG")"
+            echo "app_url=$(jq -r .appUrl <<<"$CONFIG")"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Same Dockerfiles CI already built and smoke-tested; the gha cache makes these fast.
+      - name: Build + push api image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: api
+          push: true
+          tags: ${{ steps.cfg.outputs.api }}:${{ env.SHA }}
+          cache-from: type=gha,scope=api
+          provenance: false # ECR shows attestation manifests as extra untagged "images"
+      - name: Build + push migrator image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: api
+          target: migrator
+          push: true
+          tags: ${{ steps.cfg.outputs.migrator }}:${{ env.SHA }}
+          cache-from: type=gha,scope=api
+          provenance: false
+      - name: Build + push web image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: web
+          push: true
+          tags: ${{ steps.cfg.outputs.web }}:${{ env.SHA }}
+          cache-from: type=gha,scope=web
+          provenance: false
+
+      # First deploy: services are at 0 tasks, so --start brings everything up.
+      # Paused environment (scripts/aws/down.sh, RDS stopped): don't wake it up. Just record the
+      # new tag; scripts/aws/up.sh migrates + rolls out exactly this tag on resume.
+      - name: Migrate + roll out
+        run: |
+          PREV=$(aws ssm get-parameter --name /ams/prod/IMAGE_TAG --query Parameter.Value --output text)
+          DESIRED=$(aws ecs describe-services --cluster ams-prod --services app \
+            --query 'services[0].desiredCount' --output text)
+          if [ "$PREV" = bootstrap ]; then
+            ./scripts/aws/rollout.sh "$SHA" --start
+          elif [ "$DESIRED" = 0 ]; then
+            echo "Environment is paused: images pushed, tag recorded, nothing started."
+            aws ssm put-parameter --name /ams/prod/IMAGE_TAG --type String --overwrite --value "$SHA" >/dev/null
+          else
+            ./scripts/aws/rollout.sh "$SHA"
+          fi
+
+      - name: Smoke test the live URL
+        run: |
+          RUNNING=$(aws ecs describe-services --cluster ams-prod --services app \
+            --query 'services[0].desiredCount' --output text)
+          if [ "$RUNNING" = 0 ]; then echo "paused, skipping"; exit 0; fi
+          BASE="${{ steps.cfg.outputs.app_url }}" REMOTE=1 ./scripts/smoke.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Deploy"
+            echo "- Commit: \`$SHA\`"
+            echo "- URL: ${{ steps.cfg.outputs.app_url }}"
+          } >> "$GITHUB_STEP_SUMMARY"

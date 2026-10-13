@@ -11,3 +11,9 @@ coverage/
 .idea/
 # benchmark output is machine-specific; the rendered docs/BENCHMARKS.md is committed
 api/bench/results.json
+# Terraform: providers, local state (may contain secrets), real variable values
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+terraform.tfvars

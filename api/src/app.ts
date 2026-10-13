@@ -43,7 +43,9 @@ export function createApp({ prisma, config, logger, metrics, queue, storage, red
   const app = express();
 
   app.disable('x-powered-by');
-  app.set('trust proxy', 1); // behind one proxy (Vite dev / AWS ALB): real client IP for rate limiting
+  // Real client IP for rate limiting = the entry N hops from the right of X-Forwarded-For.
+  // 1 locally (nginx / Vite proxy), 3 on AWS (CloudFront -> ALB -> nginx). See env.ts.
+  app.set('trust proxy', config.trustProxyHops ?? 1);
   app.use(httpObservability(log, m)); // first: so even rejected requests get an id, a log line, a timing
   app.use(helmet());
   app.use(cors({ origin: config.corsOrigin, credentials: true, exposedHeaders: ['X-Request-Id', 'Location'] }));

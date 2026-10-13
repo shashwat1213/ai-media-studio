@@ -1,0 +1,50 @@
+# Static security scan of the Terraform (run in CI: `checkov -d infra --config-file infra/.checkov.yaml`).
+# Every skipped check is a DELIBERATE trade-off for a single-environment portfolio project, with
+# the reason next to it. Anything not listed here must pass.
+framework: [terraform]
+quiet: true
+compact: true
+skip-check:
+  # --- cost: each of these is a paid feature that adds $/month for little value at this scale ---
+  - CKV_AWS_68     # WAF on CloudFront (~$5+/mo per web ACL + rules)
+  - CKV2_AWS_47    # WAF Log4j rule set (follows from the above)
+  - CKV_AWS_157    # RDS Multi-AZ (doubles the DB price)
+  - CKV_AWS_118    # RDS enhanced monitoring (CloudWatch charges)
+  - CKV_AWS_353    # RDS Performance Insights
+  - CKV_AWS_129    # RDS log exports to CloudWatch (ingestion charges)
+  - CKV2_AWS_30    # Postgres query logging (same)
+  - CKV2_AWS_11    # VPC flow logs (ingestion charges)
+  - CKV_AWS_65     # ECS Container Insights (per-metric charges; /metrics + logs instead)
+  - CKV_AWS_86     # CloudFront access logs (needs another bucket; enable when debugging)
+  - CKV_AWS_91     # ALB access logs (same)
+  - CKV_AWS_18     # S3 access logging (same)
+  - CKV_AWS_144    # S3 cross-region replication (second region = double storage)
+  - CKV_AWS_338    # 1-year log retention (7 days is enough to debug; storage is billed)
+  - CKV_AWS_136    # ECR KMS CMK ($1/mo per key; AES-256 SSE is on by default)
+  - CKV_AWS_145    # S3 KMS CMK (SSE-S3 AES-256 is enabled explicitly)
+  - CKV_AWS_158    # CloudWatch Logs KMS CMK (logs are encrypted by default)
+  - CKV_AWS_337    # SSM KMS CMK (SecureString uses the AWS-managed key)
+  - CKV2_AWS_42    # custom TLS certificate (needs a domain; *.cloudfront.net cert is used)
+  - CKV_AWS_174    # TLS policy on the default CloudFront certificate can't be changed (needs a custom cert)
+  - CKV_AWS_310    # CloudFront origin failover (needs a second origin/region)
+  # --- architecture: secured another way ---
+  - CKV_AWS_2      # ALB listener is HTTP: the ALB is INTERNAL, only reachable via CloudFront VPC origin;
+  - CKV_AWS_103    #   viewers get HTTPS at CloudFront (redirect-to-https). TLS to an internal ALB needs a domain cert.
+  - CKV2_AWS_20    #   (same)
+  - CKV_AWS_378    #   target group HTTP inside the VPC (same)
+  - CKV_AWS_260    # port 80 ingress is from the CloudFront prefix list, not 0.0.0.0/0 (false positive)
+  - CKV_AWS_333    # public IPs on tasks instead of a $33/mo NAT Gateway; SGs allow no inbound except ALB->app
+  - CKV2_AWS_34    # DEPLOY_CONFIG / IMAGE_TAG are non-secret plain String params by design
+  - CKV2_AWS_32    # a response headers policy IS attached (checkov can't resolve the managed-policy id local)
+  - CKV_AWS_161    # RDS IAM auth: app uses a password from SSM; IAM auth needs token refresh logic in Prisma
+  # --- teardown-friendly portfolio settings (var.teardown_friendly; flip it for anything real) ---
+  - CKV_AWS_293    # RDS deletion protection
+  - CKV_AWS_150    # ALB deletion protection
+  - CKV_AWS_21     # versioning on the media bucket (generated images are disposable)
+  - CKV2_AWS_61    # lifecycle rules on the media bucket
+  - CKV2_AWS_62    # S3 event notifications (nothing consumes them)
+  # --- not applicable ---
+  - CKV_AWS_305    # default root object: the SPA is served by nginx behind the ALB, not from S3
+  - CKV_AWS_374    # geo restriction: the app is meant to be public
+  - CKV_AWS_336    # read-only root FS for the third-party redis image / prisma migrator (they write temp files)
+  - CKV_AWS_394    # AZ list pinning: we only take the first two zones
