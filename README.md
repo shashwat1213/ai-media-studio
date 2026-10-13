@@ -42,7 +42,7 @@ Cloudflare gives every account **10,000 free "Neurons" per day** (≈170 images 
 1. Sign up at https://dash.cloudflare.com/sign-up (free plan).
 2. **Account ID**: dashboard → *Workers & Pages* (or *AI* → *Workers AI*) → copy "Account ID" from the right sidebar.
 3. **API token**: *My Profile* → *API Tokens* → *Create Token* → template **"Workers AI"** (permissions: Workers AI Read + Edit) → create → copy it (shown once).
-4. Put them in the root `.env` (for Docker) and/or `api/.env` (for `npm run dev`). Both files are gitignored:
+4. Easiest: `bash scripts/set-cloudflare-token.sh` (asks for the token without echoing it, verifies it with Cloudflare, writes the root `.env`). Or put them in the root `.env` (for Docker) and/or `api/.env` (for `npm run dev`) yourself. Both files are gitignored:
    ```
    AI_PROVIDER=cloudflare
    CLOUDFLARE_ACCOUNT_ID=<account id>

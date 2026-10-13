@@ -21,6 +21,8 @@
 - Web: typecheck, lint, build; **initial JS 102 kB gzip (budget 120 kB)**: the landing page is its own lazy chunk.
 - Headless Chrome tour (desktop 1440 + mobile 390): landing, register, dashboard, generate (4 prompts incl. `[fail]`), model menu, gallery, lightbox + arrow-key nav. No page errors; **no horizontal overflow** on any mobile page. The only console error was an expected 429 (4th parallel job hit the 3-active-jobs cap) that the UI shows as a toast.
 
+**Real end-to-end with Cloudflare (2026-10-14):** direct REST call → 200 + a 1024×1024 JPEG in 3.9 s. Through the app (UI → API → BullMQ → worker → Cloudflare → S3 → presigned URL → UI): 3 prompts, all DONE in **2.5–6.0 s** each, 1024×1024 JPEGs of 0.7–0.9 MB, balance 50 → 44 and `SUM(ledger) == balance`. Recorded in a 56 s walkthrough video; `docs/screenshots` now show real FLUX output.
+
 ## Decisions & trade-offs
 1. **Why Cloudflare, not OpenRouter, for "free":** checked OpenRouter's live model list on 2026-10-13: every `:free` model is text-only, every image model is paid. Cloudflare's Workers AI free allocation (10,000 Neurons/day, no card) covers ~170 flux-1-schnell images/day at 4 steps (4.8 neurons/tile × 4 tiles + 9.6/step). Pollinations needs no key at all but adds rate limits and its own terms; Cloudflare is an account you control, with a dashboard showing usage.
 2. **Quota exhaustion is a permanent error, not a retry.** Retrying a 429 caused by an exhausted daily allocation can't succeed until 00:00 UTC; three retries would only delay the refund. The user gets "Today's free image quota is used up" + their credits back.
