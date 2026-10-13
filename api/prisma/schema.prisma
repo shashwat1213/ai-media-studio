@@ -53,6 +53,13 @@ model CreditTransaction {
 
 /// QUEUED -> PROCESSING -> DONE | FAILED. Transitions are conditional updates
 /// (UPDATE ... WHERE status IN (...)) so a late/duplicate message can't move a job backwards.
+/// IMAGE = text -> image via an AI provider. MOTION = an existing image -> short MP4 with a
+/// cinematic camera move, rendered locally by ffmpeg in the worker (free, deterministic).
+enum JobKind {
+  IMAGE
+  MOTION
+}
+
 enum JobStatus {
   QUEUED
   PROCESSING
@@ -63,6 +70,7 @@ enum JobStatus {
 model GenerationJob {
   id             String    @id @default(uuid())
   userId         String
+  kind           JobKind   @default(IMAGE)
   prompt         String
   model          String
   aspectRatio    String
@@ -78,27 +86,39 @@ model GenerationJob {
   finishedAt     DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
+  /// MOTION only: the image being animated. SetNull: deleting the source image later must not
+  /// delete the finished video (or its history).
+  sourceAssetId  String?
+  /// MOTION only: camera preset id (see motion.ts) and clip length.
+  motionPreset   String?
+  durationS      Int?
   user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  asset          Asset?
+  asset          Asset?    @relation("JobOutput")
+  sourceAsset    Asset?    @relation("MotionSource", fields: [sourceAssetId], references: [id], onDelete: SetNull)
 
   @@unique([userId, idempotencyKey])
   @@index([userId, createdAt])
   @@index([status, updatedAt]) // stuck-job sweeper
+  @@index([sourceAssetId])
 }
 
 /// A generated file in S3/MinIO. The bytes live in object storage; this row is the index.
 model Asset {
-  id         String        @id @default(uuid())
+  id         String          @id @default(uuid())
   userId     String
-  jobId      String        @unique
-  storageKey String        @unique // users/<userId>/<jobId>.<ext>
+  jobId      String          @unique
+  storageKey String          @unique // users/<userId>/<jobId>.<ext>
   mimeType   String
   bytes      Int
   width      Int?
   height     Int?
-  createdAt  DateTime      @default(now())
-  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  job        GenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  /// Videos only.
+  durationMs Int?
+  createdAt  DateTime        @default(now())
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job        GenerationJob   @relation("JobOutput", fields: [jobId], references: [id], onDelete: Cascade)
+  /// Motion jobs made from this image.
+  motionJobs GenerationJob[] @relation("MotionSource")
 
   @@index([userId, createdAt])
 }

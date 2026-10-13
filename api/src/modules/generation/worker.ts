@@ -8,12 +8,14 @@ import { pingRedis } from '../../lib/redis.js';
 import type { Metrics } from '../../observability/metrics.js';
 import { processGenerationJob, sweepStuckJobs } from './processor.js';
 import type { ImageProvider } from './providers/types.js';
+import type { MotionRenderer } from './motion-renderer.js';
 import { GENERATION_QUEUE, type GenerationJobData } from './queue.js';
 
 export interface GenerationWorkerDeps {
   prisma: PrismaClient;
   connection: Redis;
   provider: ImageProvider;
+  motion?: MotionRenderer;
   storage: Storage;
   logger: Logger;
   metrics?: Metrics;
@@ -29,7 +31,7 @@ export interface GenerationWorkerDeps {
  * or a CPU-heavy image step can never make the API slow, and each scales on its own.
  */
 export function startGenerationWorker(deps: GenerationWorkerDeps) {
-  const { prisma, connection, provider, storage, logger, metrics } = deps;
+  const { prisma, connection, provider, motion, storage, logger, metrics } = deps;
 
   const worker = new Worker<GenerationJobData>(
     GENERATION_QUEUE,
@@ -38,7 +40,7 @@ export function startGenerationWorker(deps: GenerationWorkerDeps) {
         job.data.jobId,
         // attemptsMade = finished attempts before this one.
         { attempt: job.attemptsMade + 1, maxAttempts: deps.maxAttempts, signal },
-        { prisma, provider, storage, logger, metrics },
+        { prisma, provider, motion, storage, logger, metrics },
       );
       if (result === 'retry') throw new Error('transient provider failure, retrying');
       return result;

@@ -66,6 +66,8 @@ const ApiSchema = SharedSchema.extend({
 const WorkerSchema = SharedSchema.extend({
   WORKER_PORT: z.coerce.number().int().positive().default(4001), // /health + /metrics
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(4),
+  /** ffmpeg binary for MOTION jobs (image -> MP4). Installed in the Docker image; on a dev machine use the system one. */
+  FFMPEG_PATH: z.string().min(1).default('ffmpeg'),
 });
 
 const needsMetricsToken = (e: { NODE_ENV: string; METRICS_TOKEN?: string }) =>

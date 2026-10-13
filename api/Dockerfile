@@ -81,6 +81,9 @@ RUN rm -rf node_modules/prisma node_modules/@prisma/engines node_modules/@prisma
 # ---------- runtime (default) ----------
 FROM base AS runtime
 ENV PORT=4000
+# ffmpeg renders MOTION jobs (image -> MP4) in the worker. ~+60 MB, from Alpine's signed repo.
+# Same image runs the API (which never calls it): one image for both keeps deploys simple.
+RUN apk add --no-cache ffmpeg
 # --chown: the non-root user owns its files.
 COPY --from=runtime-deps --chown=node:node /app/node_modules ./node_modules
 COPY --from=build        --chown=node:node /app/dist ./dist

@@ -60,6 +60,13 @@ export function createStorage(cfg: StorageConfig) {
       );
     },
 
+    /** Read an object fully into memory. For generated assets (a few MB), not for huge files. */
+    async get(key: string): Promise<Buffer> {
+      const res = await internal.send(new GetObjectCommand({ Bucket: cfg.bucket, Key: key }));
+      if (!res.Body) throw new Error(`empty body for ${key}`);
+      return Buffer.from(await res.Body.transformToByteArray());
+    },
+
     async remove(key: string) {
       await internal.send(new DeleteObjectCommand({ Bucket: cfg.bucket, Key: key }));
     },

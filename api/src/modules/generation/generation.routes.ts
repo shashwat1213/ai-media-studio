@@ -5,6 +5,7 @@ import { HttpError } from '../../lib/errors.js';
 import { requireAuth } from '../auth/require-auth.js';
 import type { GenerationService } from './generation.service.js';
 import { ASPECT_RATIOS, catalogFor, type ProviderMode } from './models.js';
+import { MOTION_DURATIONS, MOTION_PRESETS, motionCost } from './motion.js';
 
 /** The request schema depends on the active provider: only ITS models (and their ratios) are valid. */
 function generateSchema(mode: ProviderMode) {
@@ -25,6 +26,16 @@ function generateSchema(mode: ProviderMode) {
     });
 }
 
+const MotionSchema = z.object({
+  sourceAssetId: z.string().uuid('sourceAssetId must be an image id'),
+  preset: z.enum(MOTION_PRESETS.map((p) => p.id) as [string, ...string[]]),
+  durationS: z
+    .number()
+    .int()
+    .refine((d) => (MOTION_DURATIONS as readonly number[]).includes(d), `Duration must be one of ${MOTION_DURATIONS.join(', ')} seconds`)
+    .default(5),
+});
+
 // Ids are uuids. Validating the shape avoids a DB round-trip for garbage input.
 const IdParam = z.object({ id: z.string().uuid() });
 const PageQuery = z.object({
@@ -33,7 +44,9 @@ const PageQuery = z.object({
 });
 const JobsQuery = PageQuery.extend({
   status: z.enum(['QUEUED', 'PROCESSING', 'DONE', 'FAILED']).optional(),
+  kind: z.enum(['IMAGE', 'MOTION']).optional(),
 });
+const AssetsQuery = PageQuery.extend({ type: z.enum(['image', 'video']).optional() });
 // Same character rules as request ids: it ends up in the DB and in logs.
 const IdempotencyKey = z.string().regex(/^[A-Za-z0-9._:-]{8,100}$/, 'Idempotency-Key must be 8-100 safe characters');
 
@@ -71,6 +84,23 @@ export function generationRouter(
     });
   });
 
+  router.get('/motion/presets', (_req, res) => {
+    res.json({
+      // Honest label for the UI: this is a camera move, not AI video.
+      engine: 'camera',
+      presets: MOTION_PRESETS.map(({ id, name, description }) => ({ id, name, description })),
+      durations: MOTION_DURATIONS.map((s) => ({ seconds: s, credits: motionCost(s) })),
+    });
+  });
+
+  router.post('/motion', auth, generateLimiter, async (req, res) => {
+    const input = MotionSchema.parse(req.body);
+    const rawKey = req.get('Idempotency-Key');
+    const key = rawKey === undefined ? undefined : IdempotencyKey.parse(rawKey);
+    const { job, replayed } = await service.createMotion(req.userId!, input, key);
+    res.status(replayed ? 200 : 202).location(`/jobs/${job.id}`).json({ job });
+  });
+
   router.post('/generate', auth, generateLimiter, async (req, res) => {
     const input = GenerateSchema.parse(req.body);
     const rawKey = req.get('Idempotency-Key');
@@ -91,7 +121,7 @@ export function generationRouter(
   });
 
   router.get('/assets', auth, async (req, res) => {
-    res.json(await service.listAssets(req.userId!, PageQuery.parse(req.query)));
+    res.json(await service.listAssets(req.userId!, AssetsQuery.parse(req.query)));
   });
 
   router.get('/assets/:id', auth, async (req, res) => {

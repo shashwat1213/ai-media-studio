@@ -4,6 +4,7 @@ import { createRedis } from './lib/redis.js';
 import { createStorage, storageConfigFromEnv } from './lib/storage.js';
 import { startGenerationWorker, startWorkerHttp } from './modules/generation/worker.js';
 import { providerFromEnv } from './modules/generation/providers/index.js';
+import { createFfmpegRenderer } from './modules/generation/motion-renderer.js';
 import { createLogger } from './observability/logger.js';
 import { createMetrics } from './observability/metrics.js';
 
@@ -17,6 +18,7 @@ const metrics = createMetrics();
 const connection = createRedis(env.REDIS_URL, 'worker');
 const storage = createStorage(storageConfigFromEnv(env));
 const provider = providerFromEnv(env);
+const motion = createFfmpegRenderer({ ffmpegPath: env.FFMPEG_PATH, timeoutMs: 120_000 });
 
 if (env.NODE_ENV !== 'production') await storage.ensureBucket();
 
@@ -24,6 +26,7 @@ const running = startGenerationWorker({
   prisma,
   connection,
   provider,
+  motion,
   storage,
   logger,
   metrics,
@@ -34,7 +37,7 @@ const running = startGenerationWorker({
 const http = startWorkerHttp(env.WORKER_PORT, { prisma, connection, metrics, metricsToken: env.METRICS_TOKEN });
 
 logger.info(
-  { provider: provider.name, concurrency: env.WORKER_CONCURRENCY, port: env.WORKER_PORT },
+  { provider: provider.name, motion: motion.name, concurrency: env.WORKER_CONCURRENCY, port: env.WORKER_PORT },
   'worker started',
 );
 
