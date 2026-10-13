@@ -66,10 +66,12 @@ export interface ModelOption {
   name: string;
   description: string;
   credits: number;
+  /** Ratios this model supports (some only output squares). Older APIs omit it = all. */
+  aspectRatios?: string[];
 }
 
 export interface ModelCatalog {
-  mode: 'stub' | 'openrouter';
+  mode: 'stub' | 'openrouter' | 'cloudflare';
   models: ModelOption[];
   aspectRatios: string[];
 }

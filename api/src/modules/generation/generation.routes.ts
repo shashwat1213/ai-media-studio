@@ -4,17 +4,26 @@ import { z } from 'zod';
 import { HttpError } from '../../lib/errors.js';
 import { requireAuth } from '../auth/require-auth.js';
 import type { GenerationService } from './generation.service.js';
-import { ASPECT_RATIOS, MODEL_IDS, MODELS } from './models.js';
+import { ASPECT_RATIOS, catalogFor, type ProviderMode } from './models.js';
 
-const GenerateSchema = z.object({
-  prompt: z
-    .string()
-    .trim()
-    .min(3, 'Prompt must be at least 3 characters')
-    .max(1000, 'Prompt must be at most 1000 characters'),
-  model: z.enum(MODEL_IDS),
-  aspectRatio: z.enum(ASPECT_RATIOS).default('1:1'),
-});
+/** The request schema depends on the active provider: only ITS models (and their ratios) are valid. */
+function generateSchema(mode: ProviderMode) {
+  const catalog = catalogFor(mode);
+  return z
+    .object({
+      prompt: z
+        .string()
+        .trim()
+        .min(3, 'Prompt must be at least 3 characters')
+        .max(1000, 'Prompt must be at most 1000 characters'),
+      model: z.enum(catalog.map((m) => m.id) as [string, ...string[]]),
+      aspectRatio: z.enum(ASPECT_RATIOS).default('1:1'),
+    })
+    .refine((v) => catalog.find((m) => m.id === v.model)!.aspectRatios.includes(v.aspectRatio), {
+      message: 'This model does not support that aspect ratio',
+      path: ['aspectRatio'],
+    });
+}
 
 // Ids are uuids. Validating the shape avoids a DB round-trip for garbage input.
 const IdParam = z.object({ id: z.string().uuid() });
@@ -36,10 +45,12 @@ function parseId(params: unknown) {
 
 export function generationRouter(
   service: GenerationService,
-  opts: { jwtSecret: string; providerMode: 'stub' | 'openrouter'; generateRateLimit: number; onOrphan?: (key: string, err: unknown) => void },
+  opts: { jwtSecret: string; providerMode: ProviderMode; generateRateLimit: number; onOrphan?: (key: string, err: unknown) => void },
 ): Router {
   const router = Router();
   const auth = requireAuth(opts.jwtSecret);
+  const catalog = catalogFor(opts.providerMode);
+  const GenerateSchema = generateSchema(opts.providerMode);
 
   // Per-USER limit (not per IP): behind a NAT, one office shares an IP.
   const generateLimiter = rateLimit({
@@ -54,7 +65,8 @@ export function generationRouter(
   router.get('/generate/models', (_req, res) => {
     res.json({
       mode: opts.providerMode,
-      models: MODELS.map(({ id, name, description, credits }) => ({ id, name, description, credits })),
+      // usdPerImage and provider params are internal: never sent to the browser.
+      models: catalog.map(({ id, name, description, credits, aspectRatios }) => ({ id, name, description, credits, aspectRatios })),
       aspectRatios: ASPECT_RATIOS,
     });
   });

@@ -1,11 +1,12 @@
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Link } from 'react-router';
-import { Loader2, Sparkles } from 'lucide-react';
+import { ArrowLeft, Loader2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Logo } from '@/components/brand/logo';
+import { Aurora } from '@/components/fx/aurora';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { credentialsSchema, type Credentials } from './schemas';
@@ -55,77 +56,108 @@ export function AuthForm({ mode, onSubmit }: Props) {
   const { isSubmitting, errors } = form.formState;
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-muted/40 p-6">
-      <motion.div
-        className="w-full max-w-sm"
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.25, ease: 'easeOut' }}
-      >
-        <div className="mb-6 flex items-center justify-center gap-2 font-semibold">
-          <Sparkles className="size-5 text-primary" />
-          AI Media Studio
+    <div className="grid min-h-screen lg:grid-cols-2">
+      {/* Left: brand panel (desktop only) */}
+      <div className="relative hidden overflow-hidden border-r lg:block">
+        <Aurora />
+        <div className="relative flex h-full flex-col justify-between p-10">
+          <Link to="/">
+            <Logo />
+          </Link>
+          <div className="max-w-md">
+            <p className="text-gradient text-4xl font-semibold leading-tight tracking-tight">
+              {mode === 'register' ? 'Your studio is one step away.' : 'Pick up where you left off.'}
+            </p>
+            <p className="mt-4 text-muted-foreground">
+              Type a prompt, get an image. Credits are reserved up front and refunded automatically if anything fails.
+            </p>
+            <div className="mt-8 grid grid-cols-3 gap-3">
+              {['from-fuchsia-500/70 to-indigo-900', 'from-amber-400/60 to-purple-900', 'from-cyan-400/60 to-violet-950'].map((g, i) => (
+                <motion.div
+                  key={g}
+                  className={`aspect-[3/4] rounded-xl bg-gradient-to-br ${g} ring-1 ring-white/10`}
+                  animate={{ y: [0, i % 2 ? 8 : -8, 0] }}
+                  transition={{ duration: 6 + i, repeat: Infinity, ease: 'easeInOut' }}
+                />
+              ))}
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">© AI Media Studio</p>
         </div>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-xl">{c.title}</CardTitle>
-            <CardDescription>{c.description}</CardDescription>
-          </CardHeader>
+      </div>
+
+      {/* Right: the form */}
+      <div className="relative flex items-center justify-center p-6">
+        <div aria-hidden className="absolute inset-0 bg-[radial-gradient(50%_40%_at_50%_0%,oklch(0.55_0.25_293/16%),transparent)] lg:hidden" />
+        <motion.div
+          className="relative w-full max-w-sm"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3, ease: 'easeOut' }}
+        >
+          <Link to="/" className="mb-10 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
+            <ArrowLeft className="size-4" />
+            Back
+          </Link>
+          <div className="mb-8 lg:hidden">
+            <Logo />
+          </div>
+          <h1 className="text-3xl font-semibold tracking-tight">{c.title}</h1>
+          <p className="mt-2 text-sm text-muted-foreground">{c.description}</p>
+
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(submit)} noValidate>
-              <CardContent className="space-y-4">
-                <FormField
-                  control={form.control}
-                  name="email"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Email</FormLabel>
-                      <FormControl>
-                        <Input type="email" autoComplete="email" placeholder="you@example.com" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="password"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Password</FormLabel>
-                      <FormControl>
-                        <Input
-                          type="password"
-                          autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                          {...field}
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                {errors.root && (
-                  <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                    {errors.root.message}
-                  </p>
+            <form onSubmit={form.handleSubmit(submit)} noValidate className="mt-8 space-y-4">
+              <FormField
+                control={form.control}
+                name="email"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Email</FormLabel>
+                    <FormControl>
+                      <Input type="email" autoComplete="email" placeholder="you@example.com" className="h-11 rounded-xl" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
                 )}
-              </CardContent>
-              <CardFooter className="mt-6 flex flex-col gap-3">
-                <Button type="submit" className="w-full" disabled={isSubmitting}>
-                  {isSubmitting && <Loader2 className="animate-spin" />}
-                  {c.submit}
-                </Button>
-                <p className="text-sm text-muted-foreground">
-                  {c.alt.text}{' '}
-                  <Link to={c.alt.to} className="font-medium text-foreground underline-offset-4 hover:underline">
-                    {c.alt.link}
-                  </Link>
+              />
+              <FormField
+                control={form.control}
+                name="password"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Password</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="password"
+                        autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                        placeholder={mode === 'register' ? 'At least 8 characters' : undefined}
+                        className="h-11 rounded-xl"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              {errors.root && (
+                <p role="alert" className="rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  {errors.root.message}
                 </p>
-              </CardFooter>
+              )}
+              <Button type="submit" size="lg" className="btn-glow h-11 w-full rounded-xl" disabled={isSubmitting}>
+                {isSubmitting && <Loader2 className="animate-spin" />}
+                {c.submit}
+              </Button>
+              <p className="pt-2 text-center text-sm text-muted-foreground">
+                {c.alt.text}{' '}
+                <Link to={c.alt.to} className="font-medium text-foreground underline-offset-4 hover:underline">
+                  {c.alt.link}
+                </Link>
+              </p>
             </form>
           </Form>
-        </Card>
-      </motion.div>
+        </motion.div>
+      </div>
     </div>
   );
 }

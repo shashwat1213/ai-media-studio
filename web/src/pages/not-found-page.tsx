@@ -1,12 +1,14 @@
 import { Link } from 'react-router';
+import { Aurora } from '@/components/fx/aurora';
 import { Button } from '@/components/ui/button';
 
 export function NotFoundPage() {
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
-      <p className="text-6xl font-bold text-muted-foreground/40">404</p>
-      <p className="text-muted-foreground">This page doesn't exist.</p>
-      <Button asChild variant="outline">
+    <div className="relative flex min-h-screen flex-col items-center justify-center gap-4 overflow-hidden p-6 text-center">
+      <Aurora className="opacity-50" />
+      <p className="text-gradient relative text-8xl font-semibold tracking-tighter">404</p>
+      <p className="relative text-muted-foreground">This page doesn't exist.</p>
+      <Button asChild className="btn-glow relative rounded-xl">
         <Link to="/">Go home</Link>
       </Button>
     </div>

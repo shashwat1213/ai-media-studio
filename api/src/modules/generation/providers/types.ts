@@ -19,7 +19,7 @@ export interface GeneratedImage {
 }
 
 export interface ImageProvider {
-  readonly name: 'stub' | 'openrouter';
+  readonly name: 'stub' | 'openrouter' | 'cloudflare';
   generate(req: GenerateRequest): Promise<GeneratedImage>;
 }
 

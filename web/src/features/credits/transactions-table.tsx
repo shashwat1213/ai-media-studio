@@ -39,12 +39,12 @@ export function TransactionsTable({ transactions, isLoading }: Props) {
       <TableBody>
         {transactions.map((t) => (
           <TableRow key={t.id}>
-            <TableCell className="text-muted-foreground">{dateFmt.format(new Date(t.createdAt))}</TableCell>
+            <TableCell className="text-xs text-muted-foreground">{dateFmt.format(new Date(t.createdAt))}</TableCell>
             <TableCell>
-              <Badge variant="secondary">{reasonLabel[t.reason]}</Badge>
+              <Badge variant="secondary" className="rounded-md bg-white/[0.06] font-normal">{reasonLabel[t.reason]}</Badge>
             </TableCell>
             <TableCell
-              className={`text-right font-medium tabular-nums ${t.delta > 0 ? 'text-emerald-600' : 'text-foreground'}`}
+              className={`text-right font-medium tabular-nums ${t.delta > 0 ? 'text-success' : 'text-foreground'}`}
             >
               {t.delta > 0 ? `+${t.delta}` : t.delta}
             </TableCell>
