@@ -36,9 +36,12 @@ const SharedSchema = z.object({
   SIGNED_URL_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(900),
 
   // --- AI provider ---
-  // 'stub' = free local fake images. 'openrouter' = real (paid) calls; needs a key.
-  AI_PROVIDER: z.enum(['stub', 'openrouter']).default('stub'),
+  // 'stub' = free local fake images. 'cloudflare' = real AI on Workers AI's FREE daily allocation
+  // (needs an account id + API token). 'openrouter' = real, PAID calls; needs a key.
+  AI_PROVIDER: z.enum(['stub', 'cloudflare', 'openrouter']).default('stub'),
   OPENROUTER_API_KEY: z.string().optional(),
+  CLOUDFLARE_ACCOUNT_ID: z.string().optional(),
+  CLOUDFLARE_API_TOKEN: z.string().optional(),
   STUB_DELAY_MS: z.coerce.number().int().min(0).default(2500),
   PROVIDER_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
 
@@ -69,11 +72,17 @@ const needsMetricsToken = (e: { NODE_ENV: string; METRICS_TOKEN?: string }) =>
   e.NODE_ENV !== 'production' || Boolean(e.METRICS_TOKEN);
 const needsKey = (e: { AI_PROVIDER: string; OPENROUTER_API_KEY?: string }) =>
   e.AI_PROVIDER !== 'openrouter' || Boolean(e.OPENROUTER_API_KEY);
+const needsCloudflare = (e: { AI_PROVIDER: string; CLOUDFLARE_ACCOUNT_ID?: string; CLOUDFLARE_API_TOKEN?: string }) =>
+  e.AI_PROVIDER !== 'cloudflare' || Boolean(e.CLOUDFLARE_ACCOUNT_ID && e.CLOUDFLARE_API_TOKEN);
 
 function finalize<T extends z.ZodTypeAny>(schema: T) {
   return schema
     .refine(needsMetricsToken, { message: 'METRICS_TOKEN is required in production', path: ['METRICS_TOKEN'] })
-    .refine(needsKey, { message: 'OPENROUTER_API_KEY is required when AI_PROVIDER=openrouter', path: ['OPENROUTER_API_KEY'] });
+    .refine(needsKey, { message: 'OPENROUTER_API_KEY is required when AI_PROVIDER=openrouter', path: ['OPENROUTER_API_KEY'] })
+    .refine(needsCloudflare, {
+      message: 'CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required when AI_PROVIDER=cloudflare',
+      path: ['CLOUDFLARE_API_TOKEN'],
+    });
 }
 
 export type SharedEnv = z.infer<typeof SharedSchema>;

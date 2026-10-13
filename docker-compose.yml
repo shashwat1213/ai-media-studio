@@ -27,6 +27,9 @@ x-app-env: &app-env
   S3_FORCE_PATH_STYLE: "true"
   AI_PROVIDER: ${AI_PROVIDER:-stub}
   OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+  # Free real AI: Cloudflare Workers AI (AI_PROVIDER=cloudflare). Values come from the root .env.
+  CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
+  CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
   LOG_LEVEL: ${LOG_LEVEL:-info}
   # Local-only defaults. Real deployments inject these from AWS Secrets Manager (Phase 5).
   METRICS_TOKEN: ${METRICS_TOKEN:-local-metrics-token-change-me}

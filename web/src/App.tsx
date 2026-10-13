@@ -11,12 +11,13 @@ const GeneratePage = lazy(() => import('@/pages/generate-page').then((m) => ({ d
 const GalleryPage = lazy(() => import('@/pages/gallery-page').then((m) => ({ default: m.GalleryPage })));
 const LoginPage = lazy(() => import('@/pages/login-page').then((m) => ({ default: m.LoginPage })));
 const RegisterPage = lazy(() => import('@/pages/register-page').then((m) => ({ default: m.RegisterPage })));
+const LandingPage = lazy(() => import('@/pages/landing-page').then((m) => ({ default: m.LandingPage })));
 const NotFoundPage = lazy(() => import('@/pages/not-found-page').then((m) => ({ default: m.NotFoundPage })));
 
 function PageFallback() {
   return (
-    <div className="flex min-h-screen items-center justify-center">
-      <Loader2 className="size-6 animate-spin text-muted-foreground" aria-label="Loading" />
+    <div className="flex min-h-screen items-center justify-center bg-background">
+      <Loader2 className="size-6 animate-spin text-primary" aria-label="Loading" />
     </div>
   );
 }
@@ -30,7 +31,9 @@ export default function App() {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
           </Route>
-          <Route element={<RequireAuth />}>
+          {/* One shell for all app pages (so the nav animates between them). Logged out,
+              "/" shows the marketing page instead of redirecting to /login. */}
+          <Route element={<RequireAuth landing={<LandingPage />} />}>
             <Route element={<AppShell />}>
               <Route index element={<DashboardPage />} />
               <Route path="/generate" element={<GeneratePage />} />

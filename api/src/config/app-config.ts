@@ -1,5 +1,6 @@
 import type { Env } from './env.js';
 import { providerMode } from '../modules/generation/providers/index.js';
+import type { ProviderMode } from '../modules/generation/models.js';
 
 /** The subset of configuration the Express app needs. Tests build this directly. */
 export interface AppConfig {
@@ -12,7 +13,7 @@ export interface AppConfig {
   secureCookies: boolean; // true in production (HTTPS only)
   metricsToken?: string;
   // Phase 2
-  providerMode: 'stub' | 'openrouter';
+  providerMode: ProviderMode;
   maxActiveJobsPerUser: number;
   generateRateLimit: number;
 }

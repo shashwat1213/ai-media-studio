@@ -1,83 +1,108 @@
 import { motion } from 'framer-motion';
-import { Download, ImageOff, Loader2, RotateCcw } from 'lucide-react';
+import { Download, ImageOff, Maximize2, RotateCcw, Wand2 } from 'lucide-react';
 import { cn } from 'cn';
 import type { Job, ModelOption } from '@/lib/api';
-import { Button } from '@/components/ui/button';
-import { JobStatusBadge } from './job-status-badge';
-import { aspectClass, dateFmt, duration, modelName } from './format';
+import { aspectClass, duration, modelName } from './format';
 
 interface Props {
   job: Job;
   models?: ModelOption[];
   onOpen?: (job: Job) => void;
+  onRemix?: (prompt: string) => void;
 }
 
-/** One generation: live status while running, the image when done, the reason + refund when failed. */
-export function JobCard({ job, models, onOpen }: Props) {
+/**
+ * One generation in the feed. While running: an animated shimmer "developing" placeholder with a
+ * stage label. Done: the image with hover actions. Failed: the reason + the refund.
+ */
+export function JobCard({ job, models, onOpen, onRemix }: Props) {
   const running = job.status === 'QUEUED' || job.status === 'PROCESSING';
   const took = duration(job.startedAt ?? job.createdAt, job.finishedAt);
+  const done = job.status === 'DONE' && job.asset;
 
   return (
     <motion.article
       layout
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="overflow-hidden rounded-xl border bg-card"
+      initial={{ opacity: 0, y: 12, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ type: 'spring', stiffness: 260, damping: 26 }}
+      className="group relative overflow-hidden rounded-2xl bg-card ring-1 ring-white/[0.07]"
     >
-      <div className={cn('relative w-full bg-muted', aspectClass[job.aspectRatio] ?? 'aspect-square')}>
-        {job.status === 'DONE' && job.asset ? (
-          <button type="button" className="group size-full" onClick={() => onOpen?.(job)} aria-label="Open image">
-            <img
-              src={job.asset.url}
+      <div className={cn('relative w-full', aspectClass[job.aspectRatio] ?? 'aspect-square')}>
+        {done ? (
+          <>
+            <motion.img
+              src={job.asset!.url}
               alt={job.prompt}
               loading="lazy"
-              className="size-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
+              initial={{ opacity: 0, filter: 'blur(16px)', scale: 1.04 }}
+              animate={{ opacity: 1, filter: 'blur(0px)', scale: 1 }}
+              transition={{ duration: 0.7, ease: 'easeOut' }}
+              className="size-full cursor-zoom-in object-cover transition-transform duration-500 group-hover:scale-[1.03]"
+              onClick={() => onOpen?.(job)}
             />
-          </button>
+            {/* hover overlay */}
+            <div className="pointer-events-none absolute inset-0 flex flex-col justify-between bg-gradient-to-t from-black/80 via-black/0 to-black/30 p-3 opacity-0 transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100">
+              <div className="pointer-events-auto flex justify-end gap-1.5">
+                <IconBtn label="Remix this prompt" onClick={() => onRemix?.(job.prompt)}>
+                  <Wand2 />
+                </IconBtn>
+                <IconBtn label="Open" onClick={() => onOpen?.(job)}>
+                  <Maximize2 />
+                </IconBtn>
+                <a href={job.asset!.downloadUrl} aria-label="Download" className="grid size-8 place-items-center rounded-lg bg-black/50 text-white backdrop-blur transition hover:bg-black/70 [&_svg]:size-4">
+                  <Download />
+                </a>
+              </div>
+              <p className="line-clamp-2 text-xs text-white/90">{job.prompt}</p>
+            </div>
+          </>
         ) : running ? (
-          <div className="flex size-full animate-pulse flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-6 animate-spin" />
-            {job.status === 'QUEUED' ? 'Waiting in queue…' : job.attempts > 1 ? `Retrying (attempt ${job.attempts})…` : 'Generating…'}
+          <div className="shimmer flex size-full flex-col items-center justify-center gap-3 p-4 text-center">
+            <div className="relative size-10">
+              <span className="absolute inset-0 animate-ping rounded-full bg-primary/30" />
+              <span className="absolute inset-2 rounded-full bg-primary shadow-[0_0_24px_var(--glow)]" />
+            </div>
+            <p className="text-xs font-medium text-foreground/90">
+              {job.status === 'QUEUED' ? 'In queue…' : job.attempts > 1 ? `Retrying · attempt ${job.attempts}` : 'Rendering…'}
+            </p>
+            <p className="line-clamp-2 max-w-[90%] text-[11px] text-muted-foreground">{job.prompt}</p>
           </div>
         ) : (
-          <div className="flex size-full flex-col items-center justify-center gap-2 p-4 text-center text-sm text-muted-foreground">
-            <ImageOff className="size-6" />
-            {job.status === 'DONE' ? 'Image deleted' : job.error}
+          <div className="flex size-full flex-col items-center justify-center gap-2 bg-[radial-gradient(circle_at_50%_40%,oklch(0.66_0.21_22/12%),transparent_60%)] p-4 text-center">
+            <ImageOff className="size-6 text-muted-foreground" />
+            <p className="text-xs text-muted-foreground">{job.status === 'DONE' ? 'Image deleted' : job.error}</p>
+            {job.status === 'FAILED' && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-medium text-success">
+                <RotateCcw className="size-3" />
+                {job.creditsCost} credits refunded
+              </span>
+            )}
           </div>
         )}
       </div>
 
-      <div className="space-y-2 p-3">
-        <div className="flex items-center justify-between gap-2">
-          <JobStatusBadge status={job.status} />
-          <span className="text-xs text-muted-foreground">{dateFmt.format(new Date(job.createdAt))}</span>
-        </div>
-        <p className="line-clamp-2 text-sm" title={job.prompt}>
-          {job.prompt}
-        </p>
-        <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-          <span className="truncate">
-            {modelName(models, job.model)} · {job.aspectRatio}
-            {took && job.status === 'DONE' ? ` · ${took}` : ''}
-          </span>
-          {job.status === 'FAILED' ? (
-            <span className="inline-flex shrink-0 items-center gap-1 text-emerald-700">
-              <RotateCcw className="size-3" />
-              {job.creditsCost} refunded
-            </span>
-          ) : (
-            <span className="shrink-0 tabular-nums">−{job.creditsCost} credits</span>
-          )}
-        </div>
-        {job.status === 'DONE' && job.asset && (
-          <Button asChild variant="outline" size="sm" className="w-full">
-            <a href={job.asset.downloadUrl}>
-              <Download />
-              Download
-            </a>
-          </Button>
-        )}
+      <div className="flex items-center justify-between gap-2 px-3 py-2 text-[11px] text-muted-foreground">
+        <span className="truncate">
+          {modelName(models, job.model)} · {job.aspectRatio}
+          {took && job.status === 'DONE' ? ` · ${took}` : ''}
+        </span>
+        <span className={cn('shrink-0 tabular-nums', job.status === 'FAILED' && 'line-through')}>−{job.creditsCost}</span>
       </div>
     </motion.article>
+  );
+}
+
+function IconBtn({ label, onClick, children }: { label: string; onClick?: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className="grid size-8 place-items-center rounded-lg bg-black/50 text-white backdrop-blur transition hover:bg-black/70 [&_svg]:size-4"
+    >
+      {children}
+    </button>
   );
 }

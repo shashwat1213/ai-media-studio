@@ -1,57 +1,55 @@
 @import 'tailwindcss';
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
 
 @custom-variant dark (&:is(.dark *));
 
 /* Design tokens (shadcn convention): components read these CSS variables,
-   so re-theming the whole app = changing values here only. */
+   so re-theming the whole app = changing values here only.
+   Theme: "studio black" — near-black canvas, layered charcoal surfaces,
+   electric violet accent (Higgsfield-style creative tool). Dark only. */
 :root {
-  --radius: 0.625rem;
-  --background: oklch(0.985 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.55 0.22 285);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.55 0.22 285);
-}
+  color-scheme: dark;
+  --radius: 0.875rem;
 
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.65 0.2 285);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.65 0.2 285);
+  --background: oklch(0.13 0.004 285);
+  --foreground: oklch(0.97 0.003 285);
+  --card: oklch(0.17 0.006 285);
+  --card-foreground: oklch(0.97 0.003 285);
+  --popover: oklch(0.19 0.008 285);
+  --popover-foreground: oklch(0.97 0.003 285);
+
+  --primary: oklch(0.64 0.25 293);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.22 0.008 285);
+  --secondary-foreground: oklch(0.95 0.003 285);
+  --muted: oklch(0.21 0.007 285);
+  --muted-foreground: oklch(0.68 0.012 285);
+  --accent: oklch(0.24 0.02 290);
+  --accent-foreground: oklch(0.97 0.003 285);
+  --destructive: oklch(0.66 0.21 22);
+
+  --border: oklch(1 0 0 / 8%);
+  --input: oklch(1 0 0 / 10%);
+  --ring: oklch(0.64 0.25 293);
+
+  /* Extra tokens for this theme */
+  --success: oklch(0.76 0.17 155);
+  --warning: oklch(0.82 0.15 80);
+  --glow: oklch(0.64 0.25 293 / 45%);
+  --violet-2: oklch(0.72 0.2 320); /* pink-violet, the far end of gradients */
 }
 
 @theme inline {
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
+  --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, monospace;
+
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 4px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 10px);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -70,13 +68,137 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-violet-2: var(--violet-2);
+
+  --animate-shimmer: shimmer 2.2s linear infinite;
+  --animate-aurora: aurora 18s ease-in-out infinite alternate;
+  --animate-float: float 6s ease-in-out infinite;
+
+  @keyframes shimmer {
+    from {
+      background-position: 200% 0;
+    }
+    to {
+      background-position: -200% 0;
+    }
+  }
+  @keyframes aurora {
+    0% {
+      transform: translate3d(-8%, -6%, 0) rotate(0deg) scale(1);
+    }
+    50% {
+      transform: translate3d(6%, 4%, 0) rotate(12deg) scale(1.08);
+    }
+    100% {
+      transform: translate3d(-4%, 8%, 0) rotate(-8deg) scale(1.02);
+    }
+  }
+  @keyframes float {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-10px);
+    }
+  }
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
+  html {
+    background: var(--background);
+  }
   body {
-    @apply bg-background text-foreground antialiased;
+    @apply bg-background font-sans text-foreground antialiased;
+    font-feature-settings: 'ss01', 'cv11';
+  }
+  ::selection {
+    background: oklch(0.64 0.25 293 / 40%);
+  }
+  /* Thin, dark scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: oklch(1 0 0 / 14%) transparent;
+  }
+}
+
+@layer components {
+  /* Frosted glass surface for floating chrome (nav, composer). */
+  .glass {
+    background: oklch(0.16 0.006 285 / 72%);
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    border: 1px solid oklch(1 0 0 / 8%);
+  }
+
+  /* Violet → pink gradient text for headlines. */
+  .text-gradient {
+    background: linear-gradient(100deg, oklch(0.98 0 0) 10%, oklch(0.78 0.16 293) 55%, var(--violet-2) 95%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Glowing primary CTA. */
+  .btn-glow {
+    box-shadow:
+      0 0 0 1px oklch(0.75 0.2 293 / 40%) inset,
+      0 8px 30px -6px var(--glow);
+  }
+  .btn-glow:hover {
+    box-shadow:
+      0 0 0 1px oklch(0.8 0.2 293 / 60%) inset,
+      0 10px 40px -4px var(--glow);
+  }
+
+  /* Pointer-following spotlight. JS sets --x/--y (see useSpotlight). */
+  .spotlight {
+    position: relative;
+    isolation: isolate;
+  }
+  .spotlight::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    z-index: -1;
+    opacity: 0;
+    transition: opacity 0.3s;
+    background: radial-gradient(420px circle at var(--x, 50%) var(--y, 50%), oklch(0.64 0.25 293 / 14%), transparent 60%);
+  }
+  .spotlight:hover::before {
+    opacity: 1;
+  }
+
+  /* Loading placeholder for an image being generated. */
+  .shimmer {
+    background:
+      linear-gradient(110deg, transparent 30%, oklch(1 0 0 / 7%) 50%, transparent 70%) 0 0 / 200% 100%,
+      radial-gradient(120% 90% at 20% 10%, oklch(0.64 0.25 293 / 28%), transparent 60%),
+      radial-gradient(100% 80% at 90% 90%, oklch(0.72 0.2 320 / 18%), transparent 60%),
+      var(--card);
+    animation: var(--animate-shimmer);
+  }
+
+  /* Faint dot grid used behind heroes. */
+  .bg-grid {
+    background-image: radial-gradient(oklch(1 0 0 / 9%) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
