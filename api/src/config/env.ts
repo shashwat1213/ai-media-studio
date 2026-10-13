@@ -51,6 +51,11 @@ const SharedSchema = z.object({
 const ApiSchema = SharedSchema.extend({
   PORT: z.coerce.number().int().positive().default(4000),
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
+  // How many reverse proxies sit in front of the API. Express uses it to pick the real client IP
+  // out of X-Forwarded-For (rate limits are per IP). Docker/Vite: 1 (nginx or the dev proxy).
+  // AWS: 3 (CloudFront -> ALB -> nginx). Too LOW = every user shares the proxy's IP (one shared
+  // rate limit); too HIGH = clients can spoof their IP with a fake X-Forwarded-For header.
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(1),
   // >= 32 chars: HS256 needs a long random secret to resist brute force.
   JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
   JWT_TTL_DAYS: z.coerce.number().int().positive().default(7),

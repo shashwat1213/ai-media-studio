@@ -1,6 +1,6 @@
 name: CI
 
-# Runs on every push to main and every PR. CD (deploy to AWS) comes in Phase 5.
+# Runs on every push to main and every PR. A green run on main triggers deploy.yml (Phase 5).
 on:
   push:
     branches: [main]
@@ -148,6 +148,24 @@ jobs:
           load: true
           cache-from: type=gha,scope=web
           cache-to: type=gha,scope=web,mode=max
+      # Fail on HIGH/CRITICAL vulnerabilities that have a fix available (unfixed ones can't be
+      # acted on and would just make the gate flaky). The migrator is a one-off task that never
+      # takes traffic, so it's scanned too but only reported.
+      - name: Vulnerability scan (api image)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ai-media-studio-api:local
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Vulnerability scan (web image)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ai-media-studio-web:local
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          skip-setup-trivy: true
       - name: Image sizes
         run: |
           { echo '### Docker images'; echo '| Image | Size |'; echo '|---|---|';
@@ -162,3 +180,29 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose down -v
+
+  # Phase 5: the Terraform must be well-formed and pass a static security scan before it can merge.
+  # No AWS credentials here: validate works offline (-backend=false).
+  infra:
+    name: Infra — terraform fmt/validate + checkov
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.5
+      - run: terraform fmt -check -recursive infra
+      - name: terraform validate
+        run: |
+          for d in infra/bootstrap infra/terraform; do
+            terraform -chdir=$d init -backend=false -input=false >/dev/null
+            terraform -chdir=$d validate
+          done
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: checkov (skips are justified in infra/.checkov.yaml)
+        run: |
+          pip install --quiet checkov==3.3.29
+          checkov -d infra --config-file infra/.checkov.yaml

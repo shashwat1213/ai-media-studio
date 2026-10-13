@@ -18,7 +18,12 @@ ARG NODE_IMAGE=node:22.23.3-alpine3.24
 # ---------- base: tini as PID 1 ----------
 FROM ${NODE_IMAGE} AS base
 # tini forwards SIGTERM to node and reaps zombie processes (PID 1 has special signal rules).
-RUN apk add --no-cache tini
+# npm/npx/corepack ship with the node image but nothing runs them at runtime (we start `node`
+# directly). Removing them drops ~10 HIGH CVEs in npm's own bundled deps (Trivy, Phase 5) and
+# means an attacker with code execution can't `npm install` tools. Build stages keep npm.
+RUN apk add --no-cache tini \
+ && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+           /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
 WORKDIR /app
 ENV NODE_ENV=production
 
@@ -69,7 +74,7 @@ FROM prod-deps AS runtime-deps
 # Source maps aren't used at runtime either. Verified by running the image (login + queries work).
 RUN rm -rf node_modules/prisma node_modules/@prisma/engines node_modules/@prisma/config \
            node_modules/@prisma/fetch-engine node_modules/@prisma/get-platform \
-           node_modules/effect node_modules/typescript node_modules/.bin/prisma node_modules/.bin/tsc \
+           node_modules/effect node_modules/deepmerge-ts node_modules/c12 node_modules/typescript node_modules/.bin/prisma node_modules/.bin/tsc \
  && find node_modules -name '*.map' -type f -delete \
  # Prisma ships WASM query engines for every database (mysql, sqlite, sqlserver, cockroach...)
  # for edge/serverless runtimes. We run on Node with the native musl engine (.prisma/client

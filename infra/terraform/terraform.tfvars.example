@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars (gitignored) and adjust.
+region             = "ap-southeast-2" # the AWS project's selected Region (fixed)
+budget_alert_email = "you@example.com"
+monthly_budget_usd = 20
+ai_provider        = "stub" # "openrouter" = real, paid images (set the key in SSM first, see COST.md)
+worker_use_spot    = true
+teardown_friendly  = true
