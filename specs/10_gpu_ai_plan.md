@@ -82,6 +82,18 @@ Each step: measure VRAM/time first, keep the stub path for CI, same job/credit/r
 | Wan 14B / Hunyuan | 10+ GB | No | Paid/cloud only |
 | AnimateDiff SD1.5 | 1.7 GB | Yes | Fallback: short loops, weaker motion |
 
+### Text-to-video measured (Wan 2.1 T2V 1.3B Q8 + CausVid LoRA, sd-cli vid_gen, 15 Oct 2026)
+| Test | Size / frames | Steps | Time | Peak VRAM | Result |
+|---|---|---|---|---|---|
+| Beach dance at sunset | 480×832, 33 (2.1 s @16 fps) | 8 | **193 s** (sample 124 s + VAE 54 s) | 3.0 GB | Real motion: arms, dupatta, spin; coherent person |
+| Rain dance, Mumbai night | 480×832, 49 (3.1 s) | 6 | **303 s** (209 + 79) | 3.3 GB | Real motion, neon reflections, rain; coherent |
+- **Pitfall found:** auto-fit put the video model on the AMD iGPU (Radeon 680M, "more free memory") → 60 s/step.
+  Forcing `--backend "te=cpu,diffusion=Vulkan1,vae=Vulkan1" --params-backend te=cpu` → **15 s/step on the RTX 3050 (4×)**.
+- Text encoder (umt5-xxl Q4_K_M, 3.7 GB) stays in RAM on the CPU; DiT 1.5 GB + VAE 0.25 GB in VRAM.
+- Output is MJPEG AVI at 16 fps → ffmpeg `minterpolate=fps=24` → H.264 MP4.
+- Limits: ~2–3 s per clip, 480p, ~1.5 min of GPU per second of video. Identity is from the TEXT only (no face
+  reference yet) → next: **VACE 1.3B** with the library character's reference image.
+
 ## Honest limits
 - 4 GB is the ceiling: one model at a time; video models are the stretch goal, not a promise.
 - Disk: models live on /mnt/ubuntu-storage (600+ GB free); each step lists its download size before it starts.
