@@ -5,7 +5,7 @@ import type { SharedEnv } from '../../config/env.js';
 import type { SpeechProvider } from '../audio/speech.js';
 import { ProviderError } from '../generation/providers/types.js';
 import { directorFromEnv, localAiStatus, picturesFromEnv, scribeFromEnv } from './index.js';
-import { createLocalPictures, createLocalSpeech, createSpeechRouter, isAuraVoice, PIPER_VOICES } from './local-ai.js';
+import { createLocalPictures, createLocalSpeech, createSpeechRouter, hdSize, isAuraVoice, PIPER_VOICES } from './local-ai.js';
 
 /**
  * A fake local-AI gateway on a real TCP port: the clients go through real fetch, real headers,
@@ -49,9 +49,30 @@ describe('local pictures (stable-diffusion.cpp gateway)', () => {
     reply = () => ({ headers: { 'content-type': 'image/png', 'x-seed': '4242' }, body: Buffer.from([0x89, 0x50, 0x4e, 0x47]) });
     const pics = createLocalPictures({ baseUrl: `${base}/`, token: TOKEN }); // trailing slash is trimmed
     const out = await pics.picture({ prompt: 'arjun at the ghat', negative: 'blurry', width: 512, height: 768, seed: 7 });
-    expect(out).toEqual({ data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mimeType: 'image/png', seed: 4242 });
+    expect(out).toEqual({ data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mimeType: 'image/png', seed: 4242, width: 512, height: 768 });
     expect(seen[0]).toMatchObject({ method: 'POST', url: '/image', auth: `Bearer ${TOKEN}`, type: 'application/json' });
     expect(JSON.parse(seen[0]!.body.toString())).toEqual({ prompt: 'arjun at the ghat', negative: 'blurry', width: 512, height: 768, seed: 7, steps: 6 });
+  });
+
+  it('HD: sends upscale:true, returns the JPEG with the REAL size from the gateway headers', async () => {
+    reply = () => ({ headers: { 'content-type': 'image/jpeg', 'x-seed': '9', 'x-width': '1280', 'x-height': '1920' }, body: Buffer.from([0xff, 0xd8, 0xff]) });
+    const out = await createLocalPictures({ baseUrl: base, token: TOKEN }).picture({ prompt: 'p', width: 512, height: 768, upscale: true });
+    expect(JSON.parse(seen[0]!.body.toString())).toMatchObject({ upscale: true, width: 512, height: 768 });
+    expect(out).toMatchObject({ mimeType: 'image/jpeg', width: 1280, height: 1920, seed: 9 });
+  });
+
+  it('HD without size headers (older gateway) -> computed HD size; non-HD never sends `upscale`', async () => {
+    reply = () => ({ headers: { 'content-type': 'image/jpeg' }, body: 'x' });
+    const pics = createLocalPictures({ baseUrl: base, token: TOKEN });
+    expect(await pics.picture({ prompt: 'p', width: 768, height: 448, upscale: true })).toMatchObject({ width: 1920, height: 1120 });
+    await pics.picture({ prompt: 'p', width: 64, height: 64 });
+    expect(JSON.parse(seen[1]!.body.toString())).not.toHaveProperty('upscale');
+  });
+
+  it('hdSize: long side 1920, even, same shape', () => {
+    expect(hdSize(512, 768)).toEqual({ width: 1280, height: 1920 });
+    expect(hdSize(768, 448)).toEqual({ width: 1920, height: 1120 });
+    expect(hdSize(640, 640)).toEqual({ width: 1920, height: 1920 });
   });
 
   it('missing / non-numeric seed header -> seed null', async () => {
@@ -191,8 +212,8 @@ describe('wiring from env', () => {
     const pics = picturesFromEnv(env({}));
     expect(pics.name).toBe('stub');
     const out = await pics.picture({ prompt: 'p', width: 64, height: 96, seed: 3 });
-    expect(out.mimeType).toBe('image/png');
-    expect(out.seed).toBe(3);
+    expect(out).toMatchObject({ mimeType: 'image/png', seed: 3, width: 64, height: 96 });
+    expect(await pics.picture({ prompt: 'p', width: 512, height: 768, upscale: true })).toMatchObject({ width: 1280, height: 1920 });
     expect(out.data.subarray(1, 4).toString()).toBe('PNG');
   });
 
@@ -209,10 +230,19 @@ describe('wiring from env', () => {
   });
 
   it('localAiStatus: health checks with the token; down / no token / no URL -> false', async () => {
-    reply = (s) => ({ status: s.auth === `Bearer ${TOKEN}` && s.url === '/health' ? 200 : 401 });
-    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: `${base}/`, LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: true, image: true });
-    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: base, LOCAL_AI_TOKEN: 'wrong-token-0123456789' }))).toEqual({ llm: false, image: false });
-    expect(await localAiStatus(env({ LOCAL_LLM_URL: 'http://127.0.0.1:1', LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: false, image: false });
-    expect(await localAiStatus(env({ LOCAL_LLM_URL: base }))).toEqual({ llm: false, image: false });
+    let upscale = true;
+    reply = (s) =>
+      s.auth === `Bearer ${TOKEN}` && s.url === '/health'
+        ? { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ok: true, upscale }) }
+        : { status: 401 };
+    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: `${base}/`, LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: true, image: true, upscale: true });
+    upscale = false;
+    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: base, LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: true, image: true, upscale: false });
+    reply = () => ({ status: 200, body: 'not json' }); // llama-server style health: still "up", no upscale claim
+    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: base, LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: true, image: true, upscale: false });
+    reply = (s) => ({ status: s.auth === `Bearer ${TOKEN}` ? 200 : 401 });
+    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: base, LOCAL_AI_TOKEN: 'wrong-token-0123456789' }))).toEqual({ llm: false, image: false, upscale: false });
+    expect(await localAiStatus(env({ LOCAL_LLM_URL: 'http://127.0.0.1:1', LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: false, image: false, upscale: false });
+    expect(await localAiStatus(env({ LOCAL_LLM_URL: base }))).toEqual({ llm: false, image: false, upscale: false });
   });
 });

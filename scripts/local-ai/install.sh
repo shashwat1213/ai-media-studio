@@ -3,7 +3,7 @@
 # Layout: ~/.local/share/ams-ai/{bin/<engine>, models/<kind>}
 set -euo pipefail
 ROOT="${AMS_AI_HOME:-$HOME/.local/share/ams-ai}"
-mkdir -p "$ROOT"/bin "$ROOT"/models/{llm,sd,lora,piper} "$ROOT"/tmp
+mkdir -p "$ROOT"/bin "$ROOT"/models/{llm,sd,lora,piper,upscale} "$ROOT"/tmp
 cd "$ROOT/tmp"
 
 dl() { # url dest  (resumes .part files; only renames after curl reports success)
@@ -37,13 +37,15 @@ dl "https://github.com/ggml-org/whisper.cpp/releases/download/$WHISPER_TAG/whisp
 # --- models ---------------------------------------------------------------------------------
 HF=https://huggingface.co
 PV=$HF/rhasspy/piper-voices/resolve/main
-for v in hi/hi_IN/pratham/medium/hi_IN-pratham-medium hi/hi_IN/priyamvada/medium/hi_IN-priyamvada-medium hi/hi_IN/rohan/medium/hi_IN-rohan-medium en/en_US/lessac/medium/en_US-lessac-medium; do
+for v in hi/hi_IN/pratham/medium/hi_IN-pratham-medium hi/hi_IN/priyamvada/medium/hi_IN-priyamvada-medium hi/hi_IN/rohan/medium/hi_IN-rohan-medium en/en_US/lessac/medium/en_US-lessac-medium en/en_US/ryan/high/en_US-ryan-high en/en_GB/alan/medium/en_GB-alan-medium; do
   n=$(basename "$v")
   dl "$PV/$v.onnx" "$ROOT/models/piper/$n.onnx"
   dl "$PV/$v.onnx.json" "$ROOT/models/piper/$n.onnx.json"
 done
 dl "$HF/latent-consistency/lcm-lora-sdv1-5/resolve/main/pytorch_lora_weights.safetensors" "$ROOT/models/lora/lcm-sd15.safetensors"
 dl "$HF/Lykon/DreamShaper/resolve/main/DreamShaper_8_pruned.safetensors" "$ROOT/models/sd/dreamshaper8.safetensors"
+# HD pictures: Real-ESRGAN x4plus (BSD-3-Clause, 64 MB)
+dl "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth" "$ROOT/models/upscale/RealESRGAN_x4plus.pth"
 mkdir -p "$ROOT/models/whisper"
 dl "$HF/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin" "$ROOT/models/whisper/large-v3-turbo-q5_0.bin"
 dl "$HF/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf" "$ROOT/models/llm/gemma3-4b-it-q4km.gguf"

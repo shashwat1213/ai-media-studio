@@ -23,6 +23,7 @@ import { libraryRouter } from './modules/library/library.routes.js';
 import { createLibraryService } from './modules/library/library.js';
 import { scenesRouter } from './modules/director/scenes.routes.js';
 import { PIPER_VOICES } from './modules/director/local-ai.js';
+import type { LocalAiStatus } from './modules/director/index.js';
 import { AURA_VOICES } from './modules/audio/speech.js';
 import { createStubSpeech, type SpeechProvider } from './modules/audio/speech.js';
 import { createLogger } from './observability/logger.js';
@@ -44,7 +45,7 @@ export interface AppDeps {
   /** Voice-over + transcription. Defaults to the free offline stub (tests). */
   speech?: SpeechProvider;
   /** Scene Director: is the local AI reachable? (UI hint only). */
-  localAi?: () => Promise<{ llm: boolean; image: boolean }>;
+  localAi?: () => Promise<LocalAiStatus>;
   ffmpegPath?: string;
 }
 
@@ -103,7 +104,7 @@ export function createApp({ prisma, config, logger, metrics, queue, storage, red
         jwtSecret: config.jwtSecret,
         voices: () => voices.voices,
         enqueueScene: queue.enqueueScene?.bind(queue),
-        localAi: localAi ?? (async () => ({ llm: false, image: false })),
+        localAi: localAi ?? (async () => ({ llm: false, image: false, upscale: false })),
         rateLimit: config.generateRateLimit,
       }),
     );

@@ -47,8 +47,15 @@ export const PIPER_VOICES: Voice[] = [
   { id: 'hi_IN-rohan-medium', name: 'Rohan (Hindi)', style: 'Male, clear narrator', gender: 'male' },
   { id: 'hi_IN-pratham-medium', name: 'Pratham (Hindi)', style: 'Male, warm', gender: 'male' },
   { id: 'hi_IN-priyamvada-medium', name: 'Priyamvada (Hindi)', style: 'Female, soft', gender: 'female' },
+  { id: 'en_US-ryan-high', name: 'Ryan (English, offline)', style: 'Male, clear narrator', gender: 'male' },
   { id: 'en_US-lessac-medium', name: 'Lessac (English, offline)', style: 'Female, neutral', gender: 'female' },
+  { id: 'en_GB-alan-medium', name: 'Alan (British English, offline)', style: 'Male, calm', gender: 'male' },
 ];
+
+/** Default narrator per spoken language when the user didn't pick one that fits. */
+export const DEFAULT_NARRATOR = { hi: 'hi_IN-rohan-medium', en: 'en_US-ryan-high' } as const;
+/** Which language a voice speaks (Piper ids carry it; Aura is English). */
+export const voiceLanguage = (id: string): 'hi' | 'en' => (id.startsWith('hi_') ? 'hi' : 'en');
 
 export interface PictureRequest {
   prompt: string;
@@ -56,10 +63,27 @@ export interface PictureRequest {
   width: number;
   height: number;
   seed?: number;
+  /** HD: upscale x4 on the GPU (Real-ESRGAN) to a 1920px long side; returns a JPEG. */
+  upscale?: boolean;
+}
+export interface Picture {
+  data: Buffer;
+  mimeType: 'image/png' | 'image/jpeg';
+  seed: number | null;
+  /** Real output size (differs from the request when upscaled). */
+  width: number;
+  height: number;
 }
 export interface PictureEngine {
   readonly name: string;
-  picture(req: PictureRequest, signal?: AbortSignal): Promise<{ data: Buffer; mimeType: string; seed: number | null }>;
+  picture(req: PictureRequest, signal?: AbortSignal): Promise<Picture>;
+}
+
+/** Final size of an HD (upscaled) picture: long side 1920, even numbers, same shape. Pure. */
+export const HD_LONG_SIDE = 1920;
+export function hdSize(w: number, h: number): { width: number; height: number } {
+  const k = HD_LONG_SIDE / Math.max(w, h);
+  return { width: Math.round((w * k) / 2) * 2, height: Math.round((h * k) / 2) * 2 };
 }
 
 export function createLocalPictures(o: LocalAiOptions): PictureEngine {
@@ -70,11 +94,25 @@ export function createLocalPictures(o: LocalAiOptions): PictureEngine {
       const res = await call('/image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: req.prompt, negative: req.negative, width: req.width, height: req.height, seed: req.seed, steps: 6 }),
+        body: JSON.stringify({ prompt: req.prompt, negative: req.negative, width: req.width, height: req.height, seed: req.seed, steps: 6, ...(req.upscale ? { upscale: true } : {}) }),
         signal,
+        // SD (~12 s) + ESRGAN x4 (~31 s) on a 4 GB GPU, queued behind other pictures.
+        timeoutMs: req.upscale ? 600_000 : undefined,
       });
-      const seed = Number(res.headers.get('x-seed'));
-      return { data: Buffer.from(await res.arrayBuffer()), mimeType: 'image/png', seed: Number.isFinite(seed) ? seed : null };
+      const num = (h: string) => {
+        const v = res.headers.get(h);
+        const n = v === null || v === '' ? NaN : Number(v);
+        return Number.isFinite(n) ? n : null;
+      };
+      const mimeType = (res.headers.get('content-type') ?? '').startsWith('image/jpeg') ? 'image/jpeg' : 'image/png';
+      const fallback = req.upscale ? hdSize(req.width, req.height) : { width: req.width, height: req.height };
+      return {
+        data: Buffer.from(await res.arrayBuffer()),
+        mimeType,
+        seed: num('x-seed'),
+        width: num('x-width') ?? fallback.width,
+        height: num('x-height') ?? fallback.height,
+      };
     },
   };
 }

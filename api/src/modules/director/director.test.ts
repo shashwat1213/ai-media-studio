@@ -14,7 +14,7 @@ describe('director prompts', () => {
     expect(systemPrompt('hi')).toMatch(/SPOKEN Hinglish, written in ROMAN letters/); // Devanagari comes from transliterate()
     expect(systemPrompt('hi')).toMatch(/NEVER copy them/); // few-shot style examples on unrelated topics
     expect(systemPrompt('hinglish')).toMatch(/"onScreen": at most 5 words in Hinglish \(Roman letters\)/);
-    expect(systemPrompt('en')).toMatch(/natural spoken English/);
+    expect(systemPrompt('en')).toMatch(/natural spoken ENGLISH/);
     expect(systemPrompt('en')).not.toMatch(/Hinglish/);
     expect(systemPrompt('en')).toMatch(/ONE JSON object only/);
   });

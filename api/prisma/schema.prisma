@@ -250,6 +250,8 @@ model Scene {
   language  String
   format    String
   targetS   Int
+  /// HD pictures: each shot is upscaled x4 on the GPU (Real-ESRGAN) to a 1920px long side. Costs extra.
+  hd        Boolean     @default(false)
   /// Library handle of the narrator voice (or a raw voice id), chosen at creation.
   voice     String
   status    SceneStatus @default(PLANNING)

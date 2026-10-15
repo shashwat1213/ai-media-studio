@@ -8,9 +8,10 @@ import { EditRequestSchema, normaliseEdit, type UploadInfo } from '../editor/edi
 import type { PublicItem } from '../library/library.js';
 import { createStubDirector, type DirectorModel } from './director.js';
 import { alignCaptionWords, buildDraft, imagePromptFor, pickSound, produceScene, shotStarts, type SceneScript } from './scene.js';
-import { failAndRefund, SCENE_COST } from './scenes.routes.js';
-import { createStubImageBytes } from './stub-picture.js';
-import type { PictureEngine } from './local-ai.js';
+import { failAndRefund, SCENE_COST, sceneCost } from './scenes.routes.js';
+import { picturesFromEnv } from './index.js';
+import type { PictureEngine, PictureRequest } from './local-ai.js';
+import type { SharedEnv } from '../../config/env.js';
 import { ProviderError } from '../generation/providers/types.js';
 
 const storage = makeTestStorage();
@@ -83,8 +84,9 @@ describe('scene (pure)', () => {
 });
 
 // -------------------------------------------------------------------------------------------
-const stubPictures: PictureEngine = { name: 'stub', picture: async (r) => ({ data: await createStubImageBytes(r.width, r.height), mimeType: 'image/png', seed: r.seed ?? 1 }) };
-const deps = (director: DirectorModel = createStubDirector()) => ({ prisma, storage, director, pictures: stubPictures, speech: createStubSpeech(), logger: log });
+// The same stub the worker uses without a local AI (honours `upscale` by returning the HD size).
+const stubPictures: PictureEngine = picturesFromEnv({} as SharedEnv);
+const deps = (director: DirectorModel = createStubDirector(), pictures: PictureEngine = stubPictures) => ({ prisma, storage, director, pictures, speech: createStubSpeech(), logger: log });
 
 async function userWithLibrary() {
   const u = await prisma.user.create({ data: { email: `s${Math.random()}@example.com`, passwordHash: 'x', credits: 50 } });
@@ -128,6 +130,34 @@ describe('produceScene (stub engines, real DB + storage + ffmpeg)', () => {
     expect(await produceScene(s.id, deps())).toBe('skipped'); // already READY
   }, 60_000);
 
+  it('HD scene: every picture is requested upscaled and stored at its REAL (HD) size; the draft still validates', async () => {
+    const u = await userWithLibrary();
+    const s = await prisma.scene.create({ data: { userId: u.id, prompt: '@riya walks. She smiles.', language: 'en', format: '9:16', targetS: 8, voice: 'narrator', hd: true } });
+    const asked: PictureRequest[] = [];
+    const spy: PictureEngine = { name: 'spy', picture: (r) => (asked.push(r), stubPictures.picture(r)) };
+    expect(await produceScene(s.id, deps(createStubDirector(), spy))).toBe('ready');
+    expect(asked.length).toBeGreaterThan(0);
+    for (const r of asked) expect(r).toMatchObject({ width: 512, height: 768, upscale: true });
+    const pics = await prisma.upload.findMany({ where: { userId: u.id, source: 'AI_IMAGE' } });
+    expect(pics).toHaveLength(asked.length);
+    for (const x of pics) expect(x).toMatchObject({ width: 1280, height: 1920 });
+    const done = await prisma.scene.findUniqueOrThrow({ where: { id: s.id } });
+    const uploads = await prisma.upload.findMany({ where: { userId: u.id } });
+    const infos = new Map<string, UploadInfo>(
+      uploads.map((x) => [x.id, { id: x.id, kind: x.mimeType.startsWith('audio/') ? 'audio' : 'image', durationMs: x.durationMs, hasAudio: x.hasAudio, words: (x.transcript as { words?: UploadInfo['words'] } | null)?.words ?? null }]),
+    );
+    expect(normaliseEdit(EditRequestSchema.parse(done.draft), infos).clips.length).toBe(asked.length);
+  }, 60_000);
+
+  it('a fast (non-HD) scene never asks for an upscale', async () => {
+    const u = await userWithLibrary();
+    const s = await prisma.scene.create({ data: { userId: u.id, prompt: '@riya walks.', language: 'en', format: '1:1', targetS: 6, voice: 'narrator' } });
+    const asked: PictureRequest[] = [];
+    const spy: PictureEngine = { name: 'spy', picture: (r) => (asked.push(r), stubPictures.picture(r)) };
+    expect(await produceScene(s.id, deps(createStubDirector(), spy))).toBe('ready');
+    expect(asked.every((r) => !r.upscale)).toBe(true);
+  }, 60_000);
+
   it('a broken director -> FAILED with a user-safe message; retryable errors are rethrown for the queue', async () => {
     const u = await userWithLibrary();
     const s = await prisma.scene.create({ data: { userId: u.id, prompt: 'anything', language: 'hi', format: '1:1', targetS: 10, voice: 'narrator' } });
@@ -149,11 +179,11 @@ describe('scenes API', () => {
   it('create: validates, charges, enqueues; config lists voices; others cannot see it', async () => {
     const { cookie, user } = await login();
     const cfg = await request(app).get('/scenes/config').set('Cookie', cookie).expect(200);
-    expect(cfg.body).toMatchObject({ cost: SCENE_COST, localAi: { llm: false, image: false } });
+    expect(cfg.body).toMatchObject({ cost: SCENE_COST, hdCost: sceneCost(true), localAi: { llm: false, image: false, upscale: false } });
     expect((await request(app).post('/scenes').set('Cookie', cookie).send({ prompt: 'a cat', voice: 'nobody' })).status).toBe(400);
     expect((await request(app).post('/scenes').set('Cookie', cookie).send({ prompt: 'x', voice: 'luna' })).status).toBe(400);
     const r = await request(app).post('/scenes').set('Cookie', cookie).send({ prompt: 'a cat in Goa', voice: 'luna', targetS: 15 }).expect(202);
-    expect(r.body.scene).toMatchObject({ status: 'PLANNING', language: 'hinglish', format: '9:16', targetS: 15 }); // default
+    expect(r.body.scene).toMatchObject({ status: 'PLANNING', language: 'en', format: '9:16', targetS: 15 }); // auto: written in English
     expect(enqueued).toContain(r.body.scene.id);
     expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).credits).toBe(50 - SCENE_COST);
 
@@ -203,6 +233,59 @@ describe('scenes API', () => {
     expect(Object.keys(body.scene.images)).toEqual([mine.id]); // a forged id in the script is not signed
     expect(body.scene.images[mine.id]).toMatch(/^http/);
     expect(body.scene).not.toHaveProperty('userId');
+  });
+
+  it('HD: refused (409, nothing charged) without the upscaler; with it, charged the HD price, and a retry charges HD again', async () => {
+    const { cookie, user } = await login();
+    const bal = async () => (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).credits;
+    expect((await request(app).post('/scenes').set('Cookie', cookie).send({ prompt: 'a cat', voice: 'luna', hd: true })).status).toBe(409);
+    expect(await bal()).toBe(50);
+    expect(await prisma.scene.count({ where: { userId: user.id } })).toBe(0);
+
+    const hdApp = createApp({ prisma, config: testConfig, queue: { ...fakeQueue(), enqueueScene: async () => {} }, storage, speech: createStubSpeech(), localAi: async () => ({ llm: true, image: true, upscale: true }) });
+    const r = await request(hdApp).post('/scenes').set('Cookie', cookie).send({ prompt: 'a cat', voice: 'luna', hd: true }).expect(202);
+    expect(r.body.scene).toMatchObject({ hd: true });
+    expect(sceneCost(true)).toBeGreaterThan(SCENE_COST);
+    expect(await bal()).toBe(50 - sceneCost(true));
+    expect(await failAndRefund(prisma, r.body.scene.id, 'boom')).toBe(true);
+    expect(await bal()).toBe(50); // the full HD price comes back
+    await request(hdApp).post(`/scenes/${r.body.scene.id}/retry`).set('Cookie', cookie).expect(202);
+    expect(await bal()).toBe(50 - sceneCost(true));
+    const sum = await prisma.creditTransaction.aggregate({ where: { userId: user.id }, _sum: { delta: true } });
+    expect(sum._sum.delta).toBe(await bal()); // ledger == balance
+  });
+
+  it('voice-over language: Auto follows the brief; the narrator always speaks that language', async () => {
+    const bilingual = createApp({
+      prisma, config: testConfig, queue: { ...fakeQueue(), enqueueScene: async () => {} }, storage,
+      speech: { ...createStubSpeech(), voices: [...createStubSpeech().voices, { id: 'hi_IN-rohan-medium', name: 'Rohan', style: '', gender: 'male' as const }, { id: 'en_US-ryan-high', name: 'Ryan', style: '', gender: 'male' as const }] },
+    });
+    const email = `l${Math.random()}@example.com`;
+    const cookie = cookieOf(await request(bilingual).post('/auth/register').send({ email, password: 'password-123' }));
+    const make = async (body: object) => (await request(bilingual).post('/scenes').set('Cookie', cookie).send(body).expect(202)).body.scene;
+    const clear = () => prisma.scene.updateMany({ where: { user: { email } }, data: { status: 'FAILED' } });
+
+    // asked for English in a Hinglish brief, with a Hindi narrator picked -> English + an English narrator
+    expect(await make({ prompt: 'ek ladka Jaipur mein cycle chala raha hai, english voice over chahiye', voice: 'hi_IN-rohan-medium' })).toMatchObject({ language: 'en', voice: 'en_US-ryan-high' });
+    // no voice sent: default narrator for the language
+    expect(await make({ prompt: 'A girl reads in a library, narration in Hindi' })).toMatchObject({ language: 'hi', voice: 'hi_IN-rohan-medium' });
+    await clear();
+    // explicit language wins over the brief; a fitting voice is kept
+    expect(await make({ prompt: 'English voice-over please', language: 'hinglish', voice: 'hi_IN-rohan-medium' })).toMatchObject({ language: 'hinglish', voice: 'hi_IN-rohan-medium' });
+    expect(await make({ prompt: 'a cat on a roof', language: 'en', voice: 'luna' })).toMatchObject({ language: 'en', voice: 'luna' });
+    await clear();
+    // a library VOICE item is checked by the language its voice id speaks
+    const user = await prisma.user.findUniqueOrThrow({ where: { email } });
+    await prisma.libraryItem.create({ data: { userId: user.id, kind: 'VOICE', handle: 'dadi', name: 'Dadi', description: '', settings: { engine: 'piper', voice: 'hi_IN-rohan-medium', language: 'hi' } } });
+    expect(await make({ prompt: 'subah subah chai peeta hai aur ganga ko dekhta hai', voice: 'dadi' })).toMatchObject({ language: 'hinglish', voice: 'dadi' });
+    expect(await make({ prompt: 'A dog runs on the beach', voice: 'dadi' })).toMatchObject({ language: 'en', voice: 'en_US-ryan-high' });
+    await clear();
+    // no Hindi voice on this server -> clear 400, nothing charged
+    const before = (await prisma.user.findUniqueOrThrow({ where: { email } })).credits;
+    const r = await request(app).post('/scenes').set('Cookie', (await login()).cookie).send({ prompt: 'narration in Hindi, a temple' });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/No Hindi voice/);
+    expect((await prisma.user.findUniqueOrThrow({ where: { email } })).credits).toBe(before);
   });
 
   it('queue down -> refund + 503', async () => {

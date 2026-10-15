@@ -2,10 +2,11 @@
 """
 Local AI gateway for AI Media Studio (standard library only, no pip installs).
 
-    POST /image       {"prompt", "negative"?, "width", "height", "seed"?, "steps"?}  -> image/png
+    POST /image       {"prompt", "negative"?, "width", "height", "seed"?, "steps"?, "upscale"?}
+                      -> image/png, or with "upscale": true an ESRGAN x4 image/jpeg (long side 1920)
     POST /tts         {"text", "voice", "speed"?}                                   -> audio/wav
     POST /transcribe  raw audio bytes (any format ffmpeg reads), ?language=hi         -> JSON words
-    GET  /health      -> {"ok": true, "voices": [...], "image": bool, "stt": bool}
+    GET  /health      -> {"ok": true, "voices": [...], "image": bool, "upscale": bool, "stt": bool}
 
 Every request needs "Authorization: Bearer <LOCAL_AI_TOKEN>". Engines run as subprocesses with
 fixed argument lists (no shell), inputs are length-limited, and the GPU is used by ONE image at a
@@ -32,6 +33,11 @@ PORT = int(os.environ.get("LOCAL_AI_PORT", "8082"))
 SD_BIN = os.path.join(ROOT, "bin/sd/sd-cli")
 SD_MODEL = os.path.join(ROOT, "models/sd/dreamshaper8.safetensors")
 LORA_DIR = os.path.join(ROOT, "models/lora")
+# Real-ESRGAN x4plus (BSD-3): 512x768 -> 2048x3072 on the GPU in ~31 s, ~0.5 GB VRAM (tile 128).
+# Measured: anime_6B is 3x faster but paints skin waxy; tile 256 needs 2.7 GB for no speed gain;
+# tile 512 fails on 4 GB.
+ESRGAN_MODEL = os.path.join(ROOT, "models/upscale/RealESRGAN_x4plus.pth")
+UPSCALE_LONG_SIDE = 1920  # final size: enough for a 1080x1920 reel, no wasted bytes
 PIPER_BIN = os.path.join(ROOT, "bin/piper/piper")
 PIPER_DIR = os.path.join(ROOT, "models/piper")
 WHISPER_BIN_CANDIDATES = ["bin/whisper/whisper-bin-ubuntu-x64/whisper-cli", "bin/whisper/whisper-cli"]
@@ -82,6 +88,9 @@ def make_image(body):
     steps = max(2, min(12, int(body.get("steps", 6))))
     seed = int(body.get("seed", int(time.time() * 1000) % 2147483647))
     negative = str(body.get("negative", DEFAULT_NEGATIVE))[:600]
+    upscale = body.get("upscale") is True
+    if upscale and not os.path.isfile(ESRGAN_MODEL):
+        raise ValueError("upscaler not installed (run scripts/local-ai/install.sh)")
     with tempfile.TemporaryDirectory() as d:
         out = os.path.join(d, "out.png")
         args = [
@@ -98,9 +107,22 @@ def make_image(body):
         with GPU:
             t = time.time()
             run(args, timeout=300)
+            if upscale:
+                big = os.path.join(d, "x4.png")
+                run([SD_BIN, "-M", "upscale", "--upscale-model", ESRGAN_MODEL, "--upscale-tile-size", "128",
+                     "-i", out, "-o", big], timeout=300)
             ms = int((time.time() - t) * 1000)
-        with open(out, "rb") as f:
-            return f.read(), {"seed": seed, "width": w, "height": h, "ms": ms}
+        if not upscale:
+            with open(out, "rb") as f:
+                return f.read(), {"seed": seed, "width": w, "height": h, "ms": ms, "mime": "image/png"}
+        # x4 -> long side 1920 (Lanczos), JPEG q2: ~1 MB instead of an 8 MB PNG per shot.
+        k = UPSCALE_LONG_SIDE / max(w, h)
+        fw, fh = round(w * k / 2) * 2, round(h * k / 2) * 2
+        jpg = os.path.join(d, "hd.jpg")
+        run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", big,
+             "-vf", f"scale={fw}:{fh}:flags=lanczos", "-q:v", "2", jpg], timeout=60)
+        with open(jpg, "rb") as f:
+            return f.read(), {"seed": seed, "width": fw, "height": fh, "ms": ms, "mime": "image/jpeg"}
 
 
 def make_tts(body):
@@ -186,6 +208,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if urlparse(self.path).path == "/health":
             self._send(200, {"ok": True, "voices": voices(), "image": os.path.isfile(SD_MODEL) and os.path.isfile(SD_BIN),
+                             "upscale": os.path.isfile(ESRGAN_MODEL),
                              "stt": bool(find_whisper()) and os.path.isfile(WHISPER_MODEL)})
         else:
             self._send(404, {"error": "not found"})
@@ -197,7 +220,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if url.path == "/image":
                 png, meta = make_image(json.loads(self._body()))
-                self._send(200, body=png, ctype="image/png", headers={"X-Seed": str(meta["seed"]), "X-Render-Ms": str(meta["ms"])})
+                self._send(200, body=png, ctype=meta["mime"], headers={"X-Seed": str(meta["seed"]), "X-Render-Ms": str(meta["ms"]),
+                                                                    "X-Width": str(meta["width"]), "X-Height": str(meta["height"])})
             elif url.path == "/tts":
                 self._send(200, body=make_tts(json.loads(self._body())), ctype="audio/wav")
             elif url.path == "/transcribe":

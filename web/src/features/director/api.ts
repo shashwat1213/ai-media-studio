@@ -39,6 +39,7 @@ export interface Scene {
   language: SceneLanguage;
   format: '9:16' | '16:9' | '1:1';
   targetS: number;
+  hd: boolean;
   voice: string;
   status: 'PLANNING' | 'PRODUCING' | 'READY' | 'FAILED';
   title: string | null;
@@ -54,7 +55,8 @@ export interface ScenesConfig {
   cost: number;
   limits: { shots: number; maxTotalS: number; prompt: number };
   voices: Voice[];
-  localAi: { llm: boolean; image: boolean };
+  localAi: { llm: boolean; image: boolean; upscale: boolean };
+  hdCost: number;
 }
 
 export const libraryKey = ['library'] as const;
@@ -102,7 +104,7 @@ export function useScenes() {
 export function useCreateScene() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { prompt: string; language: SceneLanguage; format: Scene['format']; targetS: number; voice: string }) =>
+    mutationFn: (body: { prompt: string; language: SceneLanguage | 'auto'; format: Scene['format']; targetS: number; voice?: string; hd: boolean }) =>
       api<{ scene: Scene }>('/scenes', { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: scenesKey });

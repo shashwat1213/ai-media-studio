@@ -246,10 +246,11 @@ export async function produceScene(sceneId: string, deps: ProduceDeps, signal?: 
     for (let i = 0; i < n; i++) {
       const s = script.shots[i]!;
       if (!s.imageUploadId) {
-        await progress(`Picture ${i + 1} of ${n}…`);
+        await progress(scene.hd ? `Picture ${i + 1} of ${n} (HD)…` : `Picture ${i + 1} of ${n}…`);
         const ip = imagePromptFor(s, library);
-        const pic = await deps.pictures.picture({ prompt: ip.prompt, negative: ip.negative, width: px.w, height: px.h, seed: ip.seed }, signal);
-        const up = await saveUpload(deps, scene.userId, pic.data, 'image/png', 'png', `shot-${i + 1}.png`, { source: 'AI_IMAGE', width: px.w, height: px.h, script: ip.prompt });
+        const pic = await deps.pictures.picture({ prompt: ip.prompt, negative: ip.negative, width: px.w, height: px.h, seed: ip.seed, upscale: scene.hd }, signal);
+        const ext = pic.mimeType === 'image/jpeg' ? 'jpg' : 'png';
+        const up = await saveUpload(deps, scene.userId, pic.data, pic.mimeType, ext, `shot-${i + 1}.${ext}`, { source: 'AI_IMAGE', width: pic.width, height: pic.height, script: ip.prompt });
         s.imageUploadId = up.id;
         s.imagePrompt = ip.prompt;
         s.seed = pic.seed ?? undefined;

@@ -7,21 +7,28 @@ import { applyDebit, applyGrant } from '../credits/credits.service.js';
 import { requireAuth } from '../auth/require-auth.js';
 import type { Voice } from '../audio/speech.js';
 import type { Storage } from '../../lib/storage.js';
-import { DIRECTOR_LIMITS, SCENE_LANGUAGES } from './director.js';
+import { DIRECTOR_LIMITS, detectLanguage, SCENE_LANGUAGE_CHOICES, spokenLanguage } from './director.js';
+import { DEFAULT_NARRATOR, voiceLanguage } from './local-ai.js';
 
 /**
  * Scene Director API. A scene costs a flat fee when it's created (pictures + voice + an LLM run on
  * the local machine; the fee just keeps the free tier fair) and is refunded once if it fails for good.
  */
 export const SCENE_COST = 5;
+/** Extra for HD pictures: ~31 s of GPU per shot for the x4 upscale (vs ~12 s for the picture). */
+export const SCENE_HD_EXTRA = 3;
+export const sceneCost = (hd: boolean) => SCENE_COST + (hd ? SCENE_HD_EXTRA : 0);
 
 const CreateScene = z.object({
   prompt: z.string().trim().min(3, 'Describe the scene').max(DIRECTOR_LIMITS.prompt),
-  language: z.enum(SCENE_LANGUAGES).default('hinglish'),
+  /** 'auto' (default) = the language the brief asks for ("English voice-over"), else the one it's written in. */
+  language: z.enum(SCENE_LANGUAGE_CHOICES).default('auto'),
   format: z.enum(['9:16', '16:9', '1:1']).default('9:16'),
   targetS: z.number().int().min(6).max(DIRECTOR_LIMITS.maxTotalS).default(20),
-  /** A VOICE library handle, or a raw voice id from GET /scenes/config. */
-  voice: z.string().min(2).max(60),
+  /** A VOICE library handle, or a raw voice id from GET /scenes/config. Omit = default narrator for the language. */
+  voice: z.string().min(2).max(60).optional(),
+  /** HD pictures (GPU x4 upscale). Needs the upscaler installed in the local AI. */
+  hd: z.boolean().default(false),
 });
 const IdParam = z.object({ id: z.string().uuid() });
 const parseId = (p: unknown) => {
@@ -30,7 +37,7 @@ const parseId = (p: unknown) => {
   return r.data.id;
 };
 
-const publicScene = (s: { id: string; prompt: string; language: string; format: string; targetS: number; voice: string; status: string; title: string | null; script: unknown; draft: unknown; progress: string | null; error: string | null; createdAt: Date; updatedAt: Date }) => s;
+const publicScene = (s: { id: string; prompt: string; language: string; format: string; targetS: number; voice: string; hd: boolean; status: string; title: string | null; script: unknown; draft: unknown; progress: string | null; error: string | null; createdAt: Date; updatedAt: Date }) => s;
 
 export function scenesRouter(opts: {
   prisma: PrismaClient;
@@ -38,7 +45,7 @@ export function scenesRouter(opts: {
   jwtSecret: string;
   voices: () => Voice[];
   enqueueScene?: (sceneId: string, attempt: string) => Promise<void>;
-  localAi: () => Promise<{ llm: boolean; image: boolean }>;
+  localAi: () => Promise<{ llm: boolean; image: boolean; upscale: boolean }>;
   rateLimit: number;
 }): Router {
   const { prisma } = opts;
@@ -59,7 +66,7 @@ export function scenesRouter(opts: {
   const limiter = rateLimit({ windowMs: 60_000, limit: opts.rateLimit, standardHeaders: 'draft-8', legacyHeaders: false, keyGenerator: (req) => req.userId!, message: { error: 'Too many requests, slow down' } });
 
   router.get('/scenes/config', auth, async (_req, res) => {
-    res.json({ cost: SCENE_COST, limits: DIRECTOR_LIMITS, voices: opts.voices(), localAi: await opts.localAi() });
+    res.json({ cost: SCENE_COST, hdCost: sceneCost(true), limits: DIRECTOR_LIMITS, voices: opts.voices(), localAi: await opts.localAi() });
   });
 
   router.get('/scenes', auth, async (req, res) => {
@@ -88,15 +95,28 @@ export function scenesRouter(opts: {
   router.post('/scenes', auth, limiter, async (req, res) => {
     const input = CreateScene.parse(req.body);
     const userId = req.userId!;
-    // The voice must exist: a VOICE item of this user, or a known voice id.
-    const item = await prisma.libraryItem.findFirst({ where: { userId, kind: 'VOICE', handle: input.voice.toLowerCase() } });
-    if (!item && !opts.voices().some((v) => v.id === input.voice)) throw new HttpError(400, 'Unknown voice');
+    const language = input.language === 'auto' ? detectLanguage(input.prompt).language : input.language;
+    const spoken = spokenLanguage(language);
+    // The voice must exist (a VOICE item of this user, or a known voice id) AND speak the scene's
+    // language: a Hindi narrator reading English (or the reverse) is exactly the bug we never want.
+    let voice = input.voice;
+    const item = voice ? await prisma.libraryItem.findFirst({ where: { userId, kind: 'VOICE', handle: voice.toLowerCase() } }) : null;
+    if (voice && !item && !opts.voices().some((v) => v.id === voice)) throw new HttpError(400, 'Unknown voice');
+    // A library VOICE item wraps a voice id in settings.voice; the id says what language it speaks.
+    const voiceLang = item ? voiceLanguage(String((item.settings as { voice?: string } | null)?.voice ?? '')) : voice ? voiceLanguage(voice) : null;
+    if (!voice || voiceLang !== spoken) {
+      const fallback = DEFAULT_NARRATOR[spoken];
+      voice = opts.voices().some((v) => v.id === fallback) ? fallback : opts.voices().find((v) => voiceLanguage(v.id) === spoken)?.id;
+      if (!voice) throw new HttpError(400, spoken === 'hi' ? 'No Hindi voice is available. Start the local AI.' : 'No English voice is available.');
+    }
     if ((await prisma.scene.count({ where: { userId, status: { in: ['PLANNING', 'PRODUCING'] } } })) >= 2) {
       throw tooManyRequests('Two scenes are already being made. Wait for one to finish.');
     }
+    // Don't charge for HD the machine can't make (checked again by the worker; a failure refunds).
+    if (input.hd && !(await opts.localAi()).upscale) throw new HttpError(409, 'HD pictures need the upscaler. Run scripts/local-ai/install.sh and start the local AI.');
     const scene = await prisma.$transaction(async (tx) => {
-      const s = await tx.scene.create({ data: { userId, prompt: input.prompt, language: input.language, format: input.format, targetS: input.targetS, voice: item ? item.handle : input.voice } });
-      await applyDebit(tx, userId, SCENE_COST, 'GENERATION', `scene:${s.id}`);
+      const s = await tx.scene.create({ data: { userId, prompt: input.prompt, language, format: input.format, targetS: input.targetS, hd: input.hd, voice: item && voice === input.voice ? item.handle : voice! } });
+      await applyDebit(tx, userId, sceneCost(s.hd), 'GENERATION', `scene:${s.id}`);
       return s;
     });
     await start(userId, scene.id, '1');
@@ -111,7 +131,8 @@ export function scenesRouter(opts: {
     const ok = await prisma.$transaction(async (tx) => {
       const { count } = await tx.scene.updateMany({ where: { id, userId, status: 'FAILED' }, data: { status: 'PLANNING', error: null, progress: 'Queued…' } });
       if (count === 0) return false;
-      await applyDebit(tx, userId, SCENE_COST, 'GENERATION', `scene:${id}:${attempt}`);
+      const { hd } = await tx.scene.findUniqueOrThrow({ where: { id }, select: { hd: true } });
+      await applyDebit(tx, userId, sceneCost(hd), 'GENERATION', `scene:${id}:${attempt}`);
       return true;
     });
     if (!ok) throw new HttpError(409, 'Only a failed scene can be retried');

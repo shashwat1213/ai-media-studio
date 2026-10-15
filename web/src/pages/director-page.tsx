@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useMe } from '@/features/auth/use-auth';
 import { openDraftInEditor } from '@/features/editor/edit-state';
+import { detectLanguage } from '@/features/director/detect-language';
 
 import {
   useCreateScene,
@@ -112,16 +113,23 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
   const { data: me } = useMe();
   const ref = useRef<HTMLTextAreaElement>(null);
   const [prompt, setPrompt] = useState('');
-  const [language, setLanguage] = useState<SceneLanguage>('hinglish');
+  const [choice, setLanguage] = useState<SceneLanguage | 'auto'>('auto');
   const [format, setFormat] = useState<Scene['format']>('9:16');
   const [targetS, setTargetS] = useState(20);
+  const [hdWanted, setHd] = useState(false);
   const [voice, setVoice] = useState('');
   const [caret, setCaret] = useState(0);
 
-  const voiceItems = library.filter((i) => i.kind === 'VOICE');
+  // Auto: the language the brief asks for ("English voice-over"), else the one it's written in.
+  const detected = useMemo(() => detectLanguage(prompt), [prompt]);
+  const language: SceneLanguage = choice === 'auto' ? detected.language : choice;
   const spoken = language === 'en' ? 'en' : 'hi';
-  const builtIn = (cfg.data?.voices ?? []).filter((v) => (spoken === 'hi' ? v.id.startsWith('hi_') : !v.id.startsWith('hi_')));
-  const chosenVoice = voice || voiceItems.find((v) => v.settings.language === spoken)?.handle || builtIn[0]?.id || '';
+  const speaks = (id: string) => (id.startsWith('hi_') ? 'hi' : 'en');
+  // Only narrators that SPEAK the scene's language are offered.
+  const voiceItems = library.filter((i) => i.kind === 'VOICE' && speaks(String(i.settings.voice ?? '')) === spoken);
+  const builtIn = (cfg.data?.voices ?? []).filter((v) => speaks(v.id) === spoken);
+  const valid = (v: string) => voiceItems.some((i) => i.handle === v) || builtIn.some((b) => b.id === v);
+  const chosenVoice = (voice && valid(voice) ? voice : '') || voiceItems[0]?.handle || builtIn[0]?.id || '';
 
   // The @word being typed at the caret, if any.
   const token = useMemo(() => {
@@ -146,15 +154,20 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
 
   async function submit() {
     try {
-      await create.mutateAsync({ prompt, language, format, targetS, voice: chosenVoice });
-      toast.success('Scene started', { description: 'Writing the script, then painting each shot. Takes 1-3 minutes on this computer.' });
+      await create.mutateAsync({ prompt, language: choice, format, targetS, voice: chosenVoice || undefined, hd });
+      toast.success('Scene started', {
+        description: hd ? 'Writing the script, then painting + upscaling each shot. About 45 s per shot on this computer.' : 'Writing the script, then painting each shot. Takes 1-3 minutes on this computer.',
+      });
       setPrompt('');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not start the scene');
     }
   }
 
-  const cost = cfg.data?.cost ?? 5;
+  const hdReady = cfg.data?.localAi.upscale ?? false;
+  // Only send HD when the machine can make it (the API refuses otherwise, before charging).
+  const hd = hdWanted && hdReady;
+  const cost = hd ? (cfg.data?.hdCost ?? 8) : (cfg.data?.cost ?? 5);
   const offline = cfg.data && !(cfg.data.localAi.llm && cfg.data.localAi.image);
   return (
     <section aria-label="New scene" className="space-y-3 rounded-2xl bg-white/[0.02] p-4 ring-1 ring-white/[0.06]">
@@ -165,7 +178,7 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
           rows={3}
           maxLength={cfg.data?.limits.prompt ?? 2000}
           value={prompt}
-          placeholder="Describe the scene… type @ to use a character, place or style from your library"
+          placeholder="Describe the scene, the voice-over and the sound… e.g. “English voice-over. A boy cycles through misty Shimla at dawn. VO: ‘Some roads you only ride once.’ Sound: wind, bicycle bell.” Type @ for your library."
           onChange={(e) => {
             setPrompt(e.target.value);
             setCaret(e.target.selectionStart);
@@ -218,12 +231,13 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
 
       <div className="flex flex-wrap items-end gap-3">
         <Seg
-          label="Language"
-          value={language}
+          label="Voice-over language"
+          value={choice}
           options={[
-            ['hinglish', 'Hinglish'],
-            ['hi', 'हिंदी'],
+            ['auto', 'Auto'],
             ['en', 'English'],
+            ['hi', 'हिंदी'],
+            ['hinglish', 'Hinglish'],
           ]}
           onChange={(v) => {
             setLanguage(v);
@@ -235,6 +249,12 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
           <span className="block text-[11px] text-muted-foreground">Length · {targetS}s</span>
           <input type="range" min={6} max={60} step={2} value={targetS} onChange={(e) => setTargetS(Number(e.target.value))} className="w-32 accent-[var(--primary)]" />
         </label>
+        <Seg
+          label={hdReady ? 'Pictures' : 'Pictures · HD needs the upscaler'}
+          value={hd ? 'hd' : 'sd'}
+          options={hdReady ? [['sd', 'Fast'], ['hd', 'HD ×4']] : [['sd', 'Fast']]}
+          onChange={(v) => setHd(v === 'hd')}
+        />
         <label className="min-w-0 flex-1 space-y-1 sm:max-w-64">
           <span className="block text-[11px] text-muted-foreground">Narrator</span>
           <select aria-label="Narrator voice" value={chosenVoice} onChange={(e) => setVoice(e.target.value)} className="h-9 w-full rounded-lg border border-input bg-background px-2 text-sm">
@@ -266,11 +286,18 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
         </Button>
       </div>
       <p className="text-[11px] text-muted-foreground">
+        {choice === 'auto' && (
+          <span className="mr-1 rounded bg-primary/10 px-1 py-0.5 text-foreground ring-1 ring-primary/30">
+            Auto → {language === 'en' ? 'English' : language === 'hi' ? 'हिंदी' : 'Hinglish'}
+            {prompt.trim() ? (detected.reason === 'asked' ? ' (asked in the brief)' : ' (from how the brief is written)') : ''}
+          </span>
+        )}
         {language === 'hinglish'
           ? 'Hindi voice-over, captions in Roman letters (“Subah subah chai, yaar”).'
           : language === 'hi'
             ? 'Hindi voice-over, captions in Devanagari.'
             : 'English voice-over and captions.'}
+        {hd && ' HD: every shot is upscaled ×4 on the GPU (sharp at 1080×1920), ~45 s per shot.'}
       </p>
       {offline && (
         <p className="flex items-center gap-1.5 text-xs text-amber-300">

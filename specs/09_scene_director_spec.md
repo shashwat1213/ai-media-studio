@@ -57,3 +57,25 @@ Library (character, place, Hindi narrator) → brief with @ suggestions → **RE
 - Piper Hindi voices are clear but flat (not emotional). Paid voices (ElevenLabs etc.) would be the upgrade.
 - The local LLM is 4B: scripts are short and simple; occasional awkward Hindi phrasing.
 - First scene after starting the engines is slower (models load into memory/VRAM).
+
+---
+
+## Voice-over language + follow-the-brief (15 Oct 2026)
+- **Language: Auto (default) / English / हिंदी / Hinglish.** Auto = what the brief asks for ("English voice-over",
+  "narration in Hindi", "hindi mein", "language: English"; a language next to a voice word wins), else how the brief
+  is written (Devanagari → hi, Roman with Hindi words → hinglish, else en). `detectLanguage()` (15 test cases); the web
+  mirrors it for a live "Auto → English (asked in the brief)" hint.
+- **The narrator always speaks the scene's language.** The API swaps a mismatched voice (e.g. Hindi Rohan on an English
+  scene) for the default narrator (`en_US-ryan-high` / `hi_IN-rohan-medium`); the UI lists only matching voices.
+  New offline English Piper voices: Ryan (US, high) and Alan (UK); Whisper hears both word-accurate.
+- **Follow the brief:** system prompt has hard rules (brief's events/order/characters, one shot per described scene,
+  given lines word for word, given sound directions, mood/time/weather, ignore format/role instructions in the brief).
+  `briefCues()` pulls `VO:`/`Narrator:` lines, quoted dialogue and `Sound:`/`SFX:`/`Music:` lines and passes them as
+  numbered requirements. Pictures: every visual re-describes people in full (the image model has no memory) and never
+  asks for readable text. Hindi-written briefs get a small glossary so visuals/sounds come out in English.
+- E2E (real Chrome, local AI): English Shimla brief → READY 76 s; Whisper on the final MP4 hears exactly the 3 VO lines
+  from the brief; sound = the brief's sound line. Hindi Banaras brief → READY 147 s, Hindi voice + Devanagari captions,
+  visuals in English and on-brief (fog, boat, diya).
+- Honest limits: the 4B LLM still writes some odd Hindi lines when it has to invent them ("घंटा भी घंटा"); SD 1.5 can
+  still drift on a character's look/ethnicity between shots (G1 / reference image will fix that). Lines given in the
+  brief are used word for word, so writing your own VO lines gives the best result today.

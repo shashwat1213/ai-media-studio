@@ -40,6 +40,24 @@ Still on the CPU today: the LLM director (Qwen3-4B, ~14.6 tok/s), the Gemma scri
 Each step: measure VRAM/time first, keep the stub path for CI, same job/credit/refund flow
 (`PictureEngine` / gateway endpoint), honest numbers in this file.
 
+## G2 — HD pictures: BUILT (15 Oct 2026)
+- Real-ESRGAN **x4plus** (64 MB, BSD-3) on `/mnt/ubuntu-storage/ams-ai/models/upscale`, run by the same
+  `sd-cli -M upscale` (Vulkan). Gateway: `POST /image {"upscale": true}` → SD 512×768 → ESRGAN ×4 →
+  Lanczos to long side 1920 → JPEG q2; returns `X-Width/X-Height`. `/health` reports `upscale`.
+- Measured, 512×768 → 2048×3072: **GPU 31 s, 0.5 GB VRAM** vs CPU 238 s (7.6×).
+  anime_6B is 3× faster but makes skin waxy (rejected); tile 256 = 2.7 GB VRAM, slower; tile 512 fails on 4 GB.
+- API: `Scene.hd` (migration `scene_hd`, default false). Price 5 → **8 credits** (`SCENE_HD_EXTRA = 3`), full
+  HD price refunded once on failure, retry charges HD again. `POST /scenes {hd:true}` → **409 before charging**
+  if the gateway has no upscaler. Uploads store the REAL size (1280×1920 JPEG, ~240–400 KB each).
+- Web: Director "Pictures: Fast / HD ×4" toggle (hidden when the upscaler isn't installed), price on the button.
+- Tests: +6 (HD request/headers/JPEG/size fallback, `hdSize`, health flag, HD scene stores real size and the
+  draft validates, non-HD never upscales, 409-without-charge, HD price + refund + retry, ledger == balance).
+  239 pass; stmts 92.5%, branches 81.1%.
+- E2E (real Chrome, Docker, local AI): Hinglish HD scene, 5 shots → READY in 445 s (script ~100 s incl. LLM
+  cold start, ~57–67 s per HD shot), balance 50 → 42, editor render 19.4 s 1080×1920 H.264+AAC in ~6.5 s;
+  frame checked: sharp, no upscale blockiness.
+- Seen, not caused by HD: the on-screen title can sit over the character's face (placement is fixed at the top).
+
 ## Honest limits
 - 4 GB is the ceiling: one model at a time; video models are the stretch goal, not a promise.
-- Disk: ~13 GB free; each step lists its download size before it starts.
+- Disk: models live on /mnt/ubuntu-storage (600+ GB free); each step lists its download size before it starts.
