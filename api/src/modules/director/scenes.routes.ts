@@ -141,6 +141,11 @@ export function scenesRouter(opts: {
     const id = parseId(req.params);
     const userId = req.userId!;
     const attempt = String(Date.now());
+    const old = await prisma.scene.findFirst({ where: { id, userId }, select: { prompt: true } });
+    if (old) {
+      const policy = checkContent(old.prompt);
+      if (!policy.ok) throw new HttpError(400, policy.reason!);
+    }
     const ok = await prisma.$transaction(async (tx) => {
       const { count } = await tx.scene.updateMany({ where: { id, userId, status: 'FAILED' }, data: { status: 'PLANNING', error: null, progress: 'Queued…' } });
       if (count === 0) return false;

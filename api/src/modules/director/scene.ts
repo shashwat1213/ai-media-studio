@@ -228,12 +228,20 @@ async function narrationTrack(deps: ProduceDeps, dir: string, script: SceneScrip
 }
 
 /** Plan (LLM) + produce (pictures, voice, sound) + draft. Updates the Scene row as it goes. */
+/** The scene was stopped (FAILED) while it was being made. */
+class SceneStopped extends Error {}
+
 export async function produceScene(sceneId: string, deps: ProduceDeps, signal?: AbortSignal): Promise<'ready' | 'failed' | 'skipped'> {
   const { prisma } = deps;
   const scene = await prisma.scene.findUnique({ where: { id: sceneId } });
   if (!scene || scene.status === 'READY' || scene.status === 'FAILED') return 'skipped';
   const log = deps.logger.child({ sceneId });
-  const progress = (p: string, data: Prisma.SceneUpdateInput = {}) => prisma.scene.update({ where: { id: sceneId }, data: { progress: p, ...data } });
+  // Progress writes double as a cancellation check: a scene stopped meanwhile (FAILED, e.g. by a
+  // moderator) is never flipped back, and production stops at the next step.
+  const progress = async (p: string) => {
+    const { count } = await prisma.scene.updateMany({ where: { id: sceneId, status: { in: ['PLANNING', 'PRODUCING'] } }, data: { progress: p } });
+    if (count === 0) throw new SceneStopped();
+  };
 
   const library = (await prisma.libraryItem.findMany({ where: { userId: scene.userId } })).map((i) => ({ ...i, settings: (i.settings ?? {}) as Record<string, unknown> })) as PublicItem[];
   const mentioned = new Set([...scene.prompt.matchAll(/@([a-z0-9_]{2,32})/gi)].map((m) => m[1]!.toLowerCase()));
@@ -251,7 +259,8 @@ export async function produceScene(sceneId: string, deps: ProduceDeps, signal?: 
       await progress('Writing the script…');
       const s = await direct(deps.director, { prompt: scene.prompt, language: scene.language as SceneLanguage, format: scene.format as '9:16', targetS: scene.targetS, library: libForPrompt }, signal, deps.scribe ?? deps.director);
       script = { ...s, shots: s.shots };
-      await prisma.scene.update({ where: { id: sceneId }, data: { status: 'PRODUCING', title: s.title, script: script as unknown as Prisma.InputJsonValue } });
+      const { count } = await prisma.scene.updateMany({ where: { id: sceneId, status: { in: ['PLANNING', 'PRODUCING'] } }, data: { status: 'PRODUCING', title: s.title, script: script as unknown as Prisma.InputJsonValue } });
+      if (count === 0) throw new SceneStopped();
     }
 
     const px = SCENE_FORMAT_PX[scene.format] ?? SCENE_FORMAT_PX['9:16']!;
@@ -360,13 +369,18 @@ export async function produceScene(sceneId: string, deps: ProduceDeps, signal?: 
     if (script.soundUploadId) audioTracks.push({ uploadId: script.soundUploadId, atS: 0, trimStartS: 0, volume: 0.45, duck: true });
     const finalDraft = { ...draft, audio: audioTracks, autoCaptions };
 
-    await prisma.scene.update({
-      where: { id: sceneId },
+    const { count: finished } = await prisma.scene.updateMany({
+      where: { id: sceneId, status: { in: ['PLANNING', 'PRODUCING'] } },
       data: { status: 'READY', progress: null, script: script as unknown as Prisma.InputJsonValue, draft: finalDraft as unknown as Prisma.InputJsonValue },
     });
+    if (finished === 0) throw new SceneStopped();
     log.info({ shots: n }, 'scene ready');
     return 'ready';
   } catch (err) {
+    if (err instanceof SceneStopped) {
+      log.warn('scene stopped while producing');
+      return 'failed';
+    }
     const msg = err instanceof ProviderError ? err.userMessage : 'Something went wrong while making the scene.';
     log.warn({ err: (err as Error).message }, 'scene failed');
     // Progress so far (pictures already made) is kept in `script`; the user can retry.

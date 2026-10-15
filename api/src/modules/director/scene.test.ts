@@ -231,6 +231,24 @@ describe('produceScene (stub engines, real DB + storage + ffmpeg)', () => {
     expect(isHeroShot(0, 1)).toBe(true);
   }, 90_000);
 
+  it('a scene stopped (FAILED) while it is being made stays stopped: no more GPU work, never flipped to READY', async () => {
+    const u = await userWithLibrary();
+    const s = await prisma.scene.create({ data: { userId: u.id, prompt: '@riya walks. A sunset over the sea. Waves.', language: 'en', format: '9:16', targetS: 12, voice: 'narrator', motion: 'ai' } });
+    let clips = 0;
+    const engine: PictureEngine = {
+      ...stubPictures,
+      name: 'stopper',
+      clip: async (r, sig) => {
+        clips++;
+        await prisma.scene.update({ where: { id: s.id }, data: { status: 'FAILED', error: 'stopped by a moderator' } }); // stopped mid-production
+        return stubPictures.clip!(r, sig);
+      },
+    };
+    expect(await produceScene(s.id, deps(createStubDirector(), engine))).toBe('failed');
+    expect(clips).toBe(1); // the next shot is never started
+    expect(await prisma.scene.findUniqueOrThrow({ where: { id: s.id } })).toMatchObject({ status: 'FAILED', error: 'stopped by a moderator' });
+  }, 60_000);
+
   it('AI video scene without a video engine fails with a clear message', async () => {
     const u = await userWithLibrary();
     const s = await prisma.scene.create({ data: { userId: u.id, prompt: '@riya walks.', language: 'en', format: '9:16', targetS: 6, voice: 'narrator', motion: 'ai' } });
@@ -352,6 +370,14 @@ describe('scenes API', () => {
     expect(await bal()).toBe(50 - sceneCost(true));
     const sum = await prisma.creditTransaction.aggregate({ where: { userId: user.id }, _sum: { delta: true } });
     expect(sum._sum.delta).toBe(await bal()); // ledger == balance
+  });
+
+  it('content policy: an old sexual scene cannot be retried', async () => {
+    const { cookie, user } = await login();
+    const s = await prisma.scene.create({ data: { userId: user.id, prompt: 'a girl showing tits', language: 'en', format: '9:16', targetS: 10, voice: 'luna', status: 'FAILED' } });
+    const r = await request(app).post(`/scenes/${s.id}/retry`).set('Cookie', cookie);
+    expect(r.status).toBe(400);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).credits).toBe(50);
   });
 
   it('content policy: a sexual brief is refused (400) before anything is charged or queued', async () => {
