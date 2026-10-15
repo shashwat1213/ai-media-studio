@@ -87,7 +87,9 @@ describe('local pictures (stable-diffusion.cpp gateway)', () => {
     expect(c).toMatchObject({ mimeType: 'video/mp4', width: 464, height: 832 });
     expect(c.data.toString()).toBe('MP4');
     expect(seen.at(-1)!.url).toBe('/video');
-    expect(JSON.parse(seen.at(-1)!.body.toString())).toMatchObject({ prompt: 'she dances', ref: 'AQID', seconds: 4.5, seed: 9, frames: 33, steps: 6 });
+    expect(JSON.parse(seen.at(-1)!.body.toString())).toMatchObject({ prompt: 'she dances', ref: 'AQID', seconds: 4.5, seed: 9, frames: 33, steps: 6, longSide: 832 });
+    await pics.clip!({ prompt: 'fast one', ref: Buffer.from([1]), width: 1080, height: 1920, seconds: 3, preset: 'fast' });
+    expect(JSON.parse(seen.at(-1)!.body.toString())).toMatchObject({ frames: 17, steps: 4, longSide: 640 });
     reply = () => ({ headers: { 'content-type': 'application/json' }, body: '{}' });
     await expect(pics.clip!({ prompt: 'x', ref: Buffer.from([1]), width: 64, height: 64, seconds: 2 })).rejects.toThrow(/no video/);
   });

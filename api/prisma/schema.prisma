@@ -254,7 +254,7 @@ model Scene {
   targetS   Int
   /// HD pictures: each shot is upscaled x4 on the GPU (Real-ESRGAN) to a 1920px long side. Costs extra.
   hd        Boolean     @default(false)
-  /// 'still' = pictures with camera moves (fast); 'ai' = every shot animated by local AI video (slow, costs more).
+  /// 'still' = pictures with camera moves; 'hero' = first + last shot animated (fast preset); 'ai' = every shot animated.
   motion    String      @default("still")
   /// Library handle of the narrator voice (or a raw voice id), chosen at creation.
   voice     String

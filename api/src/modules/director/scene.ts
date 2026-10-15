@@ -102,6 +102,9 @@ export const CAMERA_TO_MOTION = {
   static: 'none',
 } as const satisfies Record<Shot['camera'], string>;
 
+/** Hero shots: the opening and the closing shot (the moments people remember). Pure. */
+export const isHeroShot = (i: number, n: number) => i === 0 || i === n - 1;
+
 /** Where each shot starts on the output timeline (clips overlap by the 0.5 s crossfade). Pure. */
 export const SCENE_TRANSITION_S = 0.5;
 export const shotLength = (s: SceneShot) => Math.round(Math.max(s.durationS, (s.voiceS ?? 0) + 0.6) * 100) / 100;
@@ -294,15 +297,17 @@ export async function produceScene(sceneId: string, deps: ProduceDeps, signal?: 
 
     // 2b) AI video: animate each shot's picture (GPU, ~7 min each). After all voices so each clip is
     // exactly as long as its shot. Resumable like the rest: a retried scene keeps finished clips.
-    if (scene.motion === 'ai') {
+    if (scene.motion === 'ai' || scene.motion === 'hero') {
       if (!deps.pictures.clip) throw new ProviderError('no video engine', { retryable: false, userMessage: 'AI video is not available. Start the local AI with the Wan models.' });
       for (let i = 0; i < n; i++) {
         const s = script.shots[i]!;
         if (s.videoUploadId || !s.imageUploadId) continue;
-        await progress(`Moving shot ${i + 1} of ${n} (AI video, ~7 min each)…`);
+        if (scene.motion === 'hero' && !isHeroShot(i, n)) continue;
+        const preset = scene.motion === 'hero' ? 'fast' : 'full';
+        await progress(scene.motion === 'hero' ? `Moving shot ${i + 1} (hero, ~3 min)…` : `Moving shot ${i + 1} of ${n} (AI video, ~7 min each)…`);
         const pic = await prisma.upload.findFirstOrThrow({ where: { id: s.imageUploadId, userId: scene.userId } });
         const len = shotLength(s);
-        const clip = await deps.pictures.clip({ prompt: s.visual, ref: await deps.storage.get(pic.storageKey), width: px.w, height: px.h, seconds: len, seed: s.seed }, signal);
+        const clip = await deps.pictures.clip({ prompt: s.visual, ref: await deps.storage.get(pic.storageKey), width: px.w, height: px.h, seconds: len, seed: s.seed, preset }, signal);
         const f = path.join(dir, `m${i}.mp4`);
         await writeFile(f, clip.data);
         const info = await probeMedia(f, 'video/mp4');

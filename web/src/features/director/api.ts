@@ -43,7 +43,7 @@ export interface Scene {
   targetS: number;
   hd: boolean;
   /** 'ai' = every shot is a moving AI-video clip. */
-  motion: 'still' | 'ai';
+  motion: 'still' | 'hero' | 'ai';
   voice: string;
   status: 'PLANNING' | 'PRODUCING' | 'READY' | 'FAILED';
   title: string | null;
@@ -63,6 +63,7 @@ export interface ScenesConfig {
   hdCost: number;
   /** Extra credits for AI video (moving shots). */
   aiMotionExtra: number;
+  heroMotionExtra: number;
 }
 
 export const libraryKey = ['library'] as const;
@@ -110,7 +111,7 @@ export function useScenes() {
 export function useCreateScene() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { prompt: string; language: SceneLanguage | 'auto'; format: Scene['format']; targetS: number; voice?: string; hd: boolean; motion: 'still' | 'ai' }) =>
+    mutationFn: (body: { prompt: string; language: SceneLanguage | 'auto'; format: Scene['format']; targetS: number; voice?: string; hd: boolean; motion: 'still' | 'hero' | 'ai' }) =>
       api<{ scene: Scene }>('/scenes', { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: scenesKey });

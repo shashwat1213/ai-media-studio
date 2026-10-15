@@ -8,10 +8,10 @@ import { createStubSpeech } from '../audio/speech.js';
 import { EditRequestSchema, normaliseEdit, type UploadInfo } from '../editor/edit-spec.js';
 import type { PublicItem } from '../library/library.js';
 import { createStubDirector, type DirectorModel } from './director.js';
-import { alignCaptionWords, buildDraft, shotLength, faceCharacterFor, imagePromptFor, pickSound, produceScene, shotStarts, type SceneScript } from './scene.js';
-import { failAndRefund, SCENE_COST, sceneCost, SCENE_AI_MOTION_EXTRA, SCENE_HD_EXTRA } from './scenes.routes.js';
+import { alignCaptionWords, buildDraft, isHeroShot, shotLength, faceCharacterFor, imagePromptFor, pickSound, produceScene, shotStarts, type SceneScript } from './scene.js';
+import { failAndRefund, SCENE_COST, sceneCost, SCENE_AI_MOTION_EXTRA, SCENE_HD_EXTRA, SCENE_HERO_MOTION_EXTRA } from './scenes.routes.js';
 import { picturesFromEnv } from './index.js';
-import type { PictureEngine, PictureRequest } from './local-ai.js';
+import type { ClipRequest, PictureEngine, PictureRequest } from './local-ai.js';
 import type { SharedEnv } from '../../config/env.js';
 import { ProviderError } from '../generation/providers/types.js';
 
@@ -215,6 +215,22 @@ describe('produceScene (stub engines, real DB + storage + ffmpeg)', () => {
     expect(clips).toHaveLength(0);
   }, 90_000);
 
+  it('hero shots: only the first and last shot move, with the fast preset; the middle keeps camera moves', async () => {
+    const u = await userWithLibrary();
+    const s = await prisma.scene.create({ data: { userId: u.id, prompt: '@riya walks. A sunset over the sea. Waves. Night falls.', language: 'en', format: '9:16', targetS: 16, voice: 'narrator', motion: 'hero' } });
+    const asked: ClipRequest[] = [];
+    const engine: PictureEngine = { ...stubPictures, name: 'spy', clip: (r, sig) => (asked.push(r), stubPictures.clip!(r, sig)) };
+    expect(await produceScene(s.id, deps(createStubDirector(), engine))).toBe('ready');
+    const done = await prisma.scene.findUniqueOrThrow({ where: { id: s.id } });
+    const shots = (done.script as unknown as SceneScript).shots;
+    expect(shots.length).toBeGreaterThanOrEqual(3);
+    expect(shots.map((sh) => Boolean(sh.videoUploadId))).toEqual(shots.map((_, i) => i === 0 || i === shots.length - 1));
+    expect(asked).toHaveLength(2);
+    expect(asked.every((r) => r.preset === 'fast')).toBe(true);
+    expect(isHeroShot(0, 4) && isHeroShot(3, 4) && !isHeroShot(1, 4) && !isHeroShot(2, 4)).toBe(true);
+    expect(isHeroShot(0, 1)).toBe(true);
+  }, 90_000);
+
   it('AI video scene without a video engine fails with a clear message', async () => {
     const u = await userWithLibrary();
     const s = await prisma.scene.create({ data: { userId: u.id, prompt: '@riya walks.', language: 'en', format: '9:16', targetS: 6, voice: 'narrator', motion: 'ai' } });
@@ -362,8 +378,15 @@ describe('scenes API', () => {
     expect(await bal()).toBe(50);
     await request(vidApp).post(`/scenes/${r.body.scene.id}/retry`).set('Cookie', cookie).expect(202);
     expect(await bal()).toBe(50 - sceneCost(false, 'ai'));
-    // HD + AI video stack
+    // HD + AI video stack; hero is cheaper than full AI video
     expect(sceneCost(true, 'ai')).toBe(SCENE_COST + SCENE_HD_EXTRA + SCENE_AI_MOTION_EXTRA);
+    expect(sceneCost(false, 'hero')).toBe(SCENE_COST + SCENE_HERO_MOTION_EXTRA);
+    expect(sceneCost(false, 'hero')).toBeLessThan(sceneCost(false, 'ai'));
+    await prisma.scene.updateMany({ where: { userId: user.id }, data: { status: 'FAILED' } }); // the 2-running limit
+    const h = await request(vidApp).post('/scenes').set('Cookie', cookie).send({ prompt: 'a dog runs', voice: 'luna', motion: 'hero' }).expect(202);
+    await prisma.scene.updateMany({ where: { userId: user.id }, data: { status: 'FAILED' } });
+    expect(h.body.scene.motion).toBe('hero');
+    expect((await request(app).post('/scenes').set('Cookie', cookie).send({ prompt: 'a dog runs', voice: 'luna', motion: 'hero' })).status).toBe(409);
     const cfg = await request(vidApp).get('/scenes/config').set('Cookie', cookie).expect(200);
     expect(cfg.body).toMatchObject({ aiMotionExtra: SCENE_AI_MOTION_EXTRA, localAi: { video: true } });
   });

@@ -118,7 +118,7 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
   const [format, setFormat] = useState<Scene['format']>('9:16');
   const [targetS, setTargetS] = useState(20);
   const [hdWanted, setHd] = useState(false);
-  const [motionWanted, setMotion] = useState<'still' | 'ai'>('still');
+  const [motionWanted, setMotion] = useState<'still' | 'hero' | 'ai'>('still');
   const [voice, setVoice] = useState('');
   const [caret, setCaret] = useState(0);
 
@@ -161,6 +161,8 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
         description:
           motion === 'ai'
             ? 'Writing the script, painting each shot, then animating every shot with AI video (~7 min per shot). You can leave this page.'
+            : motion === 'hero'
+              ? 'Writing the script, painting each shot, then animating the first and last shot (~3 min each). You can leave this page.'
             : hd
               ? 'Writing the script, then painting + upscaling each shot. About 45 s per shot on this computer.'
               : 'Writing the script, then painting each shot. Takes 1-3 minutes on this computer.',
@@ -175,10 +177,11 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
   // Only send HD when the machine can make it (the API refuses otherwise, before charging).
   const hd = hdWanted && hdReady;
   const videoReady = cfg.data?.localAi.video ?? false;
-  const motion = motionWanted === 'ai' && videoReady ? 'ai' : 'still';
-  const cost = (hd ? (cfg.data?.hdCost ?? 8) : (cfg.data?.cost ?? 5)) + (motion === 'ai' ? (cfg.data?.aiMotionExtra ?? 10) : 0);
-  // Rough GPU time: ~4 shots per 20 s; AI video ~7 min per shot.
-  const etaMin = motion === 'ai' ? Math.round((Math.max(2, Math.round(targetS / 5)) * 7.5)) : 0;
+  const motion = motionWanted !== 'still' && videoReady ? motionWanted : 'still';
+  const motionExtra = motion === 'ai' ? (cfg.data?.aiMotionExtra ?? 10) : motion === 'hero' ? (cfg.data?.heroMotionExtra ?? 4) : 0;
+  const cost = (hd ? (cfg.data?.hdCost ?? 8) : (cfg.data?.cost ?? 5)) + motionExtra;
+  // Rough GPU time: ~4 shots per 20 s; full AI video ~7 min per shot, hero = 2 shots at ~3 min.
+  const etaMin = motion === 'ai' ? Math.round(Math.max(2, Math.round(targetS / 5)) * 7.5) : motion === 'hero' ? 7 : 0;
   const offline = cfg.data && !(cfg.data.localAi.llm && cfg.data.localAi.image);
   return (
     <section aria-label="New scene" className="space-y-3 rounded-2xl bg-white/[0.02] p-4 ring-1 ring-white/[0.06]">
@@ -269,8 +272,8 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
         <Seg
           label={videoReady ? 'Motion' : 'Motion · AI video needs the Wan models'}
           value={motion}
-          options={videoReady ? [['still', 'Camera moves'], ['ai', 'AI video']] : [['still', 'Camera moves']]}
-          onChange={(v) => setMotion(v as 'still' | 'ai')}
+          options={videoReady ? [['still', 'Camera moves'], ['hero', 'Hero shots'], ['ai', 'AI video']] : [['still', 'Camera moves']]}
+          onChange={(v) => setMotion(v as 'still' | 'hero' | 'ai')}
         />
         <label className="min-w-0 flex-1 space-y-1 sm:max-w-64">
           <span className="block text-[11px] text-muted-foreground">Narrator</span>
@@ -316,6 +319,7 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
             : 'English voice-over and captions.'}
         {hd && ' HD: every shot is upscaled ×4 on the GPU (sharp at 1080×1920), ~45 s per shot.'}
         {motion === 'ai' && ` AI video: every shot really moves (people walk, dance, hair and clothes flow). Slow on this computer: about ${etaMin} min for ${targetS}s. It runs in the background.`}
+        {motion === 'hero' && ` Hero shots: the opening and closing shots really move (fast preset), the others use camera moves. About ${etaMin} min.`}
       </p>
       {offline && (
         <p className="flex items-center gap-1.5 text-xs text-amber-300">

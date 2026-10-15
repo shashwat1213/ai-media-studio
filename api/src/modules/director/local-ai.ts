@@ -95,7 +95,11 @@ export interface ClipRequest {
   /** Final clip length; the gateway loops the ~2 s of AI motion forward/backward to fill it. */
   seconds: number;
   seed?: number;
+  /** 'fast' = 17 frames / 4 steps / smaller (~2-3 min on 4 GB); 'full' = 33 frames / 6 steps (~7 min). */
+  preset?: 'fast' | 'full';
 }
+
+export const CLIP_PRESETS = { fast: { frames: 17, steps: 4, longSide: 640 }, full: { frames: 33, steps: 6, longSide: 832 } } as const;
 export interface Clip {
   data: Buffer;
   mimeType: 'video/mp4';
@@ -159,7 +163,10 @@ export function createLocalPictures(o: LocalAiOptions): PictureEngine {
       const res = await call('/video', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: req.prompt, ref: req.ref.toString('base64'), width: req.width, height: req.height, seconds: req.seconds, seed: req.seed, frames: 33, steps: 6 }),
+        body: JSON.stringify({
+          prompt: req.prompt, ref: req.ref.toString('base64'), width: req.width, height: req.height, seconds: req.seconds, seed: req.seed,
+          ...CLIP_PRESETS[req.preset ?? 'full'],
+        }),
         signal,
         timeoutMs: CLIP_TIMEOUT_MS,
       });

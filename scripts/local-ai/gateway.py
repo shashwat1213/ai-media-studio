@@ -203,7 +203,8 @@ def make_video(body):
         raise ValueError("ref must be a PNG or JPEG up to 8 MB")
     # 480p-ish on a 4 GB card; multiples of 16. Frames are 4k+1 (Wan's latent stride).
     w, h = int(body.get("width", 480)), int(body.get("height", 832))
-    k = 832 / max(w, h)
+    long_side = max(384, min(832, int(body.get("longSide", 832))))
+    k = long_side / max(w, h)
     w, h = max(256, int(w * k) // 16 * 16), max(256, int(h * k) // 16 * 16)
     frames = max(17, min(49, int(body.get("frames", 33))))
     frames = (frames - 1) // 4 * 4 + 1

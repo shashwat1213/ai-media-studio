@@ -20,8 +20,11 @@ export const SCENE_COST = 5;
 export const SCENE_HD_EXTRA = 3;
 /** Extra for AI video: ~7 min of GPU per shot (Wan VACE) vs ~25 s for a picture. */
 export const SCENE_AI_MOTION_EXTRA = 10;
-export type SceneMotion = 'still' | 'ai';
-export const sceneCost = (hd: boolean, motion: SceneMotion = 'still') => SCENE_COST + (hd ? SCENE_HD_EXTRA : 0) + (motion === 'ai' ? SCENE_AI_MOTION_EXTRA : 0);
+/** Hero shots: only the first and last shot move (fast preset), the rest keep camera moves. */
+export const SCENE_HERO_MOTION_EXTRA = 4;
+export type SceneMotion = 'still' | 'hero' | 'ai';
+const MOTION_EXTRA: Record<SceneMotion, number> = { still: 0, hero: SCENE_HERO_MOTION_EXTRA, ai: SCENE_AI_MOTION_EXTRA };
+export const sceneCost = (hd: boolean, motion: SceneMotion = 'still') => SCENE_COST + (hd ? SCENE_HD_EXTRA : 0) + MOTION_EXTRA[motion];
 
 const CreateScene = z.object({
   prompt: z.string().trim().min(3, 'Describe the scene').max(DIRECTOR_LIMITS.prompt),
@@ -34,7 +37,7 @@ const CreateScene = z.object({
   /** HD pictures (GPU x4 upscale). Needs the upscaler installed in the local AI. */
   hd: z.boolean().default(false),
   /** 'ai' = every shot animated by the local AI (Wan VACE). Slow (~7 min per shot); needs the Wan models. */
-  motion: z.enum(['still', 'ai']).default('still'),
+  motion: z.enum(['still', 'hero', 'ai']).default('still'),
 });
 const IdParam = z.object({ id: z.string().uuid() });
 const parseId = (p: unknown) => {
@@ -72,7 +75,7 @@ export function scenesRouter(opts: {
   const limiter = rateLimit({ windowMs: 60_000, limit: opts.rateLimit, standardHeaders: 'draft-8', legacyHeaders: false, keyGenerator: (req) => req.userId!, message: { error: 'Too many requests, slow down' } });
 
   router.get('/scenes/config', auth, async (_req, res) => {
-    res.json({ cost: SCENE_COST, hdCost: sceneCost(true), aiMotionExtra: SCENE_AI_MOTION_EXTRA, limits: DIRECTOR_LIMITS, voices: opts.voices(), localAi: await opts.localAi() });
+    res.json({ cost: SCENE_COST, hdCost: sceneCost(true), aiMotionExtra: SCENE_AI_MOTION_EXTRA, heroMotionExtra: SCENE_HERO_MOTION_EXTRA, limits: DIRECTOR_LIMITS, voices: opts.voices(), localAi: await opts.localAi() });
   });
 
   router.get('/scenes', auth, async (req, res) => {
@@ -121,9 +124,9 @@ export function scenesRouter(opts: {
       throw tooManyRequests('Two scenes are already being made. Wait for one to finish.');
     }
     // Don't charge for HD the machine can't make (checked again by the worker; a failure refunds).
-    const ai = input.hd || input.motion === 'ai' ? await opts.localAi() : null;
+    const ai = input.hd || input.motion !== 'still' ? await opts.localAi() : null;
     if (input.hd && !ai!.upscale) throw new HttpError(409, 'HD pictures need the upscaler. Run scripts/local-ai/install.sh and start the local AI.');
-    if (input.motion === 'ai' && !ai!.video) throw new HttpError(409, 'AI video needs the Wan models. Run scripts/local-ai/install.sh and start the local AI.');
+    if (input.motion !== 'still' && !ai!.video) throw new HttpError(409, 'AI video needs the Wan models. Run scripts/local-ai/install.sh and start the local AI.');
     const scene = await prisma.$transaction(async (tx) => {
       const s = await tx.scene.create({ data: { userId, prompt: input.prompt, language, format: input.format, targetS: input.targetS, hd: input.hd, motion: input.motion, voice: item && voice === input.voice ? item.handle : voice! } });
       await applyDebit(tx, userId, sceneCost(s.hd, s.motion as SceneMotion), 'GENERATION', `scene:${s.id}`);
