@@ -45,7 +45,7 @@ export function scenesRouter(opts: {
   jwtSecret: string;
   voices: () => Voice[];
   enqueueScene?: (sceneId: string, attempt: string) => Promise<void>;
-  localAi: () => Promise<{ llm: boolean; image: boolean; upscale: boolean }>;
+  localAi: () => Promise<{ llm: boolean; image: boolean; upscale: boolean; faceRef: boolean }>;
   rateLimit: number;
 }): Router {
   const { prisma } = opts;

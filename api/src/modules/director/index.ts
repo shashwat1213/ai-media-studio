@@ -32,11 +32,13 @@ export interface LocalAiStatus {
   image: boolean;
   /** The gateway has the ESRGAN model, so HD pictures are possible. */
   upscale: boolean;
+  /** The gateway has IP-Adapter, so library characters can keep the same face. */
+  faceRef: boolean;
 }
 
 /** Is the local AI up? (cheap health checks; used by the UI to explain why scenes can't run). */
 export async function localAiStatus(env: SharedEnv): Promise<LocalAiStatus> {
-  if (!env.LOCAL_AI_TOKEN) return { llm: false, image: false, upscale: false };
+  if (!env.LOCAL_AI_TOKEN) return { llm: false, image: false, upscale: false, faceRef: false };
   const health = async (url?: string): Promise<Record<string, unknown> | null> => {
     if (!url) return null;
     try {
@@ -48,5 +50,5 @@ export async function localAiStatus(env: SharedEnv): Promise<LocalAiStatus> {
     }
   };
   const [llm, gw] = await Promise.all([health(env.LOCAL_LLM_URL), health(env.LOCAL_AI_URL)]);
-  return { llm: llm !== null, image: gw !== null, upscale: gw?.upscale === true };
+  return { llm: llm !== null, image: gw !== null, upscale: gw?.upscale === true, faceRef: gw?.faceRef === true };
 }

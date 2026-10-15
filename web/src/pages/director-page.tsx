@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useMe } from '@/features/auth/use-auth';
 import { openDraftInEditor } from '@/features/editor/edit-state';
+import { uploadFile } from '@/features/editor/use-editor';
 import { detectLanguage } from '@/features/director/detect-language';
 
 import {
@@ -496,11 +497,29 @@ function ItemForm({ kind, item, onDone }: { kind: LibraryKind; item: Partial<Lib
   const [name, setName] = useState(item.name ?? '');
   const [description, setDescription] = useState(item.description ?? '');
   const [settings, setSettings] = useState<Record<string, unknown>>(item.settings ?? (kind === 'VOICE' ? { engine: 'piper', voice: 'hi_IN-rohan-medium', language: 'hi', speed: 1 } : {}));
+  const [imageUploadId, setImageUploadId] = useState<string | null>(item.imageUploadId ?? null);
+  const [uploading, setUploading] = useState(false);
+  const facePreview = (uploads.data ?? []).find((u) => u.id === imageUploadId);
+
+  async function pickFace(file: File | undefined) {
+    if (!file) return;
+    if (!/^image\/(png|jpeg)$/.test(file.type)) return toast.error('Use a PNG or JPEG photo');
+    setUploading(true);
+    try {
+      const up = await uploadFile(file, file.name);
+      setImageUploadId(up.id);
+      await uploads.refetch();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  }
   const set = (k: string, v: unknown) => setSettings((s) => ({ ...s, [k]: v === '' ? undefined : v }));
 
   async function submit() {
     try {
-      await save.mutateAsync({ id: item.id, kind, handle, name, description, settings });
+      await save.mutateAsync({ id: item.id, kind, handle, name, description, settings, imageUploadId });
       toast.success(`@${handle} saved`);
       onDone();
     } catch (err) {
@@ -533,6 +552,45 @@ function ItemForm({ kind, item, onDone }: { kind: LibraryKind; item: Partial<Lib
           <span className="text-[11px] text-muted-foreground">Look seed (same number = closer look across shots)</span>
           <Input type="number" min={0} value={(settings.seed as number | undefined) ?? ''} onChange={(e) => set('seed', e.target.value === '' ? '' : Number(e.target.value))} placeholder="e.g. 4242" className="h-9 w-40 rounded-lg" />
         </label>
+      )}
+      {kind === 'CHARACTER' && (
+        <div className="space-y-2 rounded-lg bg-white/[0.02] p-2.5 ring-1 ring-white/[0.06]">
+          <div className="flex items-start gap-3">
+            <div className="size-20 shrink-0 overflow-hidden rounded-lg bg-white/5 ring-1 ring-white/10">
+              {facePreview?.url ? <img src={facePreview.url} alt="Face reference" className="size-full object-cover" /> : <User className="m-auto mt-6 size-8 text-muted-foreground" />}
+            </div>
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <p className="text-xs font-medium">Same face in every shot</p>
+              <p className="text-[11px] text-muted-foreground">A clear, front-facing photo (PNG/JPEG). The local AI keeps this face in every picture of @{handle || 'character'}.</p>
+              <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-white/5 px-2.5 py-1 text-xs ring-1 ring-white/10 hover:bg-white/10">
+                {uploading ? <Loader2 className="size-3.5 animate-spin" /> : <Camera className="size-3.5" />}
+                {imageUploadId ? 'Change photo' : 'Upload photo'}
+                <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={(e) => void pickFace(e.target.files?.[0])} />
+              </label>
+              {imageUploadId && (
+                <button type="button" className="ml-2 text-[11px] text-muted-foreground underline" onClick={() => { setImageUploadId(null); setSettings((s) => ({ ...s, faceRef: undefined, faceConsent: undefined })); }}>
+                  remove
+                </button>
+              )}
+            </div>
+          </div>
+          {imageUploadId && (
+            <fieldset className="space-y-1">
+              <legend className="text-[11px] text-muted-foreground">This photo is… (required to use it as a face)</legend>
+              {([
+                ['self', 'Me'],
+                ['consented', 'Someone who agreed to this'],
+                ['ai_generated', 'AI-generated (not a real person)'],
+              ] as const).map(([v, l]) => (
+                <label key={v} className="mr-3 inline-flex items-center gap-1.5 text-xs">
+                  <input type="radio" name="faceConsent" checked={settings.faceConsent === v} onChange={() => setSettings((s) => ({ ...s, faceRef: true, faceConsent: v }))} />
+                  {l}
+                </label>
+              ))}
+              <p className="text-[10px] text-muted-foreground">Never use photos of other people without their permission. Videos are labelled AI-generated.</p>
+            </fieldset>
+          )}
+        </div>
       )}
       {kind === 'STYLE' && (
         <div className="grid gap-3 sm:grid-cols-2">

@@ -54,6 +54,11 @@ export const SCENE_FORMAT_PX: Record<string, { w: number; h: number }> = {
  * hair the same across shots (tested: putting the description after the action let the model
  * change the kurta's colour). Pure.
  */
+/** The character whose face this shot should keep (first CHARACTER in the shot with a consented face reference). Pure. */
+export function faceCharacterFor(shot: Shot, library: PublicItem[]): PublicItem | null {
+  return library.find((i) => i.kind === 'CHARACTER' && shot.uses.includes(i.handle) && i.imageUploadId && i.settings.faceRef === true && Boolean(i.settings.faceConsent)) ?? null;
+}
+
 export function imagePromptFor(shot: Shot, library: PublicItem[]): { prompt: string; negative?: string; seed?: number } {
   const used = library.filter((i) => shot.uses.includes(i.handle));
   const style = library.find((i) => i.kind === 'STYLE');
@@ -242,13 +247,24 @@ export async function produceScene(sceneId: string, deps: ProduceDeps, signal?: 
 
     const px = SCENE_FORMAT_PX[scene.format] ?? SCENE_FORMAT_PX['9:16']!;
     const n = script.shots.length;
+    const faceCache = new Map<string, Buffer | null>();
     // 2) Pictures (GPU, one at a time) and narration (CPU) per shot. Resumable: done shots are skipped.
     for (let i = 0; i < n; i++) {
       const s = script.shots[i]!;
       if (!s.imageUploadId) {
         await progress(scene.hd ? `Picture ${i + 1} of ${n} (HD)…` : `Picture ${i + 1} of ${n}…`);
         const ip = imagePromptFor(s, library);
-        const pic = await deps.pictures.picture({ prompt: ip.prompt, negative: ip.negative, width: px.w, height: px.h, seed: ip.seed, upscale: scene.hd }, signal);
+        // Same face in every shot: the character's reference photo (must still be the user's own READY upload).
+        const faceItem = faceCharacterFor(s, library);
+        let faceRef: Buffer | undefined;
+        if (faceItem?.imageUploadId) {
+          if (!faceCache.has(faceItem.imageUploadId)) {
+            const ref = await prisma.upload.findFirst({ where: { id: faceItem.imageUploadId, userId: scene.userId, status: 'READY', mimeType: { in: ['image/png', 'image/jpeg'] } } });
+            faceCache.set(faceItem.imageUploadId, ref ? await deps.storage.get(ref.storageKey) : null);
+          }
+          faceRef = faceCache.get(faceItem.imageUploadId) ?? undefined;
+        }
+        const pic = await deps.pictures.picture({ prompt: ip.prompt, negative: ip.negative, width: px.w, height: px.h, seed: ip.seed, upscale: scene.hd, faceRef }, signal);
         const ext = pic.mimeType === 'image/jpeg' ? 'jpg' : 'png';
         const up = await saveUpload(deps, scene.userId, pic.data, pic.mimeType, ext, `shot-${i + 1}.${ext}`, { source: 'AI_IMAGE', width: pic.width, height: pic.height, script: ip.prompt });
         s.imageUploadId = up.id;

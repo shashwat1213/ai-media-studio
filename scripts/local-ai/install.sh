@@ -3,7 +3,7 @@
 # Layout: ~/.local/share/ams-ai/{bin/<engine>, models/<kind>}
 set -euo pipefail
 ROOT="${AMS_AI_HOME:-$HOME/.local/share/ams-ai}"
-mkdir -p "$ROOT"/bin "$ROOT"/models/{llm,sd,lora,piper,upscale} "$ROOT"/tmp
+mkdir -p "$ROOT"/bin "$ROOT"/models/{llm,sd,lora,piper,upscale,ipadapter} "$ROOT"/tmp
 cd "$ROOT/tmp"
 
 dl() { # url dest  (resumes .part files; only renames after curl reports success)
@@ -46,6 +46,9 @@ dl "$HF/latent-consistency/lcm-lora-sdv1-5/resolve/main/pytorch_lora_weights.saf
 dl "$HF/Lykon/DreamShaper/resolve/main/DreamShaper_8_pruned.safetensors" "$ROOT/models/sd/dreamshaper8.safetensors"
 # HD pictures: Real-ESRGAN x4plus (BSD-3-Clause, 64 MB)
 dl "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth" "$ROOT/models/upscale/RealESRGAN_x4plus.pth"
+# Same face in every shot: IP-Adapter plus-face SD1.5 (Apache-2.0, 98 MB) + CLIP ViT-H image encoder (2.5 GB)
+dl "$HF/h94/IP-Adapter/resolve/main/models/ip-adapter-plus-face_sd15.safetensors" "$ROOT/models/ipadapter/ip-adapter-plus-face_sd15.safetensors"
+dl "$HF/h94/IP-Adapter/resolve/main/models/image_encoder/model.safetensors" "$ROOT/models/ipadapter/clip-vision-vit-h.safetensors"
 mkdir -p "$ROOT/models/whisper"
 dl "$HF/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin" "$ROOT/models/whisper/large-v3-turbo-q5_0.bin"
 dl "$HF/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf" "$ROOT/models/llm/gemma3-4b-it-q4km.gguf"

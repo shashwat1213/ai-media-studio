@@ -65,6 +65,9 @@ export interface PictureRequest {
   seed?: number;
   /** HD: upscale x4 on the GPU (Real-ESRGAN) to a 1920px long side; returns a JPEG. */
   upscale?: boolean;
+  /** Same face in every shot: a PNG/JPEG of the character's face (IP-Adapter). */
+  faceRef?: Buffer;
+  faceStrength?: number;
 }
 export interface Picture {
   data: Buffer;
@@ -94,7 +97,11 @@ export function createLocalPictures(o: LocalAiOptions): PictureEngine {
       const res = await call('/image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: req.prompt, negative: req.negative, width: req.width, height: req.height, seed: req.seed, steps: 6, ...(req.upscale ? { upscale: true } : {}) }),
+        body: JSON.stringify({
+          prompt: req.prompt, negative: req.negative, width: req.width, height: req.height, seed: req.seed, steps: 6,
+          ...(req.upscale ? { upscale: true } : {}),
+          ...(req.faceRef ? { faceRef: req.faceRef.toString('base64'), faceStrength: req.faceStrength ?? 0.65 } : {}),
+        }),
         signal,
         // SD (~12 s) + ESRGAN x4 (~31 s) on a 4 GB GPU, queued behind other pictures.
         timeoutMs: req.upscale ? 600_000 : undefined,

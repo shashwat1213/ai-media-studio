@@ -7,7 +7,7 @@ import { createStubSpeech } from '../audio/speech.js';
 import { EditRequestSchema, normaliseEdit, type UploadInfo } from '../editor/edit-spec.js';
 import type { PublicItem } from '../library/library.js';
 import { createStubDirector, type DirectorModel } from './director.js';
-import { alignCaptionWords, buildDraft, imagePromptFor, pickSound, produceScene, shotStarts, type SceneScript } from './scene.js';
+import { alignCaptionWords, buildDraft, faceCharacterFor, imagePromptFor, pickSound, produceScene, shotStarts, type SceneScript } from './scene.js';
 import { failAndRefund, SCENE_COST, sceneCost } from './scenes.routes.js';
 import { picturesFromEnv } from './index.js';
 import type { PictureEngine, PictureRequest } from './local-ai.js';
@@ -149,6 +149,39 @@ describe('produceScene (stub engines, real DB + storage + ffmpeg)', () => {
     expect(normaliseEdit(EditRequestSchema.parse(done.draft), infos).clips.length).toBe(asked.length);
   }, 60_000);
 
+  it('face reference: shots with a consented CHARACTER photo get its bytes; others and other users\' photos do not', async () => {
+    const u = await userWithLibrary();
+    const png = await (await stubPictures.picture({ prompt: 'face', width: 64, height: 64 })).data;
+    const key = `uploads/${u.id}/face.png`;
+    await storage.put(key, png, 'image/png');
+    const face = await prisma.upload.create({ data: { userId: u.id, status: 'READY', storageKey: key, fileName: 'face.png', mimeType: 'image/png', bytes: png.length } });
+    await prisma.libraryItem.updateMany({ where: { userId: u.id, handle: 'riya' }, data: { imageUploadId: face.id, settings: { seed: 7, faceRef: true, faceConsent: 'ai_generated' } } });
+    const s = await prisma.scene.create({ data: { userId: u.id, prompt: '@riya walks. A sunset over the sea.', language: 'en', format: '9:16', targetS: 8, voice: 'narrator' } });
+    const asked: PictureRequest[] = [];
+    const spy: PictureEngine = { name: 'spy', picture: (r) => (asked.push(r), stubPictures.picture(r)) };
+    // the stub director puts every mentioned handle on every shot
+    expect(await produceScene(s.id, deps(createStubDirector(), spy))).toBe('ready');
+    expect(asked.length).toBeGreaterThan(0);
+    for (const r of asked) expect(r.faceRef?.equals(png)).toBe(true);
+
+    // pure rule: needs faceRef + consent + an image, and the character must be in the shot
+    const base = { id: 'x', kind: 'CHARACTER' as const, handle: 'riya', name: 'R', description: '', imageUploadId: 'img', createdAt: new Date(0), updatedAt: new Date(0) };
+    const sh = { visual: 'v', camera: 'static' as const, durationS: 3, narration: '', roman: '', sound: '', onScreen: '', uses: ['riya'] };
+    expect(faceCharacterFor(sh, [{ ...base, settings: { faceRef: true, faceConsent: 'self' } }])?.handle).toBe('riya');
+    expect(faceCharacterFor(sh, [{ ...base, settings: { faceRef: true } }])).toBeNull(); // no consent
+    expect(faceCharacterFor(sh, [{ ...base, imageUploadId: null, settings: { faceRef: true, faceConsent: 'self' } }])).toBeNull();
+    expect(faceCharacterFor({ ...sh, uses: [] }, [{ ...base, settings: { faceRef: true, faceConsent: 'self' } }])).toBeNull();
+
+    // someone else's upload id smuggled into the library row -> no face sent
+    const other = await prisma.user.create({ data: { email: `o${Math.random()}@example.com`, passwordHash: 'x', credits: 0 } });
+    const theirs = await prisma.upload.create({ data: { userId: other.id, status: 'READY', storageKey: `uploads/${other.id}/f.png`, fileName: 'f.png', mimeType: 'image/png', bytes: 1 } });
+    await prisma.libraryItem.updateMany({ where: { userId: u.id, handle: 'riya' }, data: { imageUploadId: theirs.id } });
+    const s2 = await prisma.scene.create({ data: { userId: u.id, prompt: '@riya smiles.', language: 'en', format: '1:1', targetS: 6, voice: 'narrator' } });
+    asked.length = 0;
+    expect(await produceScene(s2.id, deps(createStubDirector(), spy))).toBe('ready');
+    expect(asked.every((r) => !r.faceRef)).toBe(true);
+  }, 60_000);
+
   it('a fast (non-HD) scene never asks for an upscale', async () => {
     const u = await userWithLibrary();
     const s = await prisma.scene.create({ data: { userId: u.id, prompt: '@riya walks.', language: 'en', format: '1:1', targetS: 6, voice: 'narrator' } });
@@ -179,7 +212,7 @@ describe('scenes API', () => {
   it('create: validates, charges, enqueues; config lists voices; others cannot see it', async () => {
     const { cookie, user } = await login();
     const cfg = await request(app).get('/scenes/config').set('Cookie', cookie).expect(200);
-    expect(cfg.body).toMatchObject({ cost: SCENE_COST, hdCost: sceneCost(true), localAi: { llm: false, image: false, upscale: false } });
+    expect(cfg.body).toMatchObject({ cost: SCENE_COST, hdCost: sceneCost(true), localAi: { llm: false, image: false, upscale: false, faceRef: false } });
     expect((await request(app).post('/scenes').set('Cookie', cookie).send({ prompt: 'a cat', voice: 'nobody' })).status).toBe(400);
     expect((await request(app).post('/scenes').set('Cookie', cookie).send({ prompt: 'x', voice: 'luna' })).status).toBe(400);
     const r = await request(app).post('/scenes').set('Cookie', cookie).send({ prompt: 'a cat in Goa', voice: 'luna', targetS: 15 }).expect(202);
@@ -242,7 +275,7 @@ describe('scenes API', () => {
     expect(await bal()).toBe(50);
     expect(await prisma.scene.count({ where: { userId: user.id } })).toBe(0);
 
-    const hdApp = createApp({ prisma, config: testConfig, queue: { ...fakeQueue(), enqueueScene: async () => {} }, storage, speech: createStubSpeech(), localAi: async () => ({ llm: true, image: true, upscale: true }) });
+    const hdApp = createApp({ prisma, config: testConfig, queue: { ...fakeQueue(), enqueueScene: async () => {} }, storage, speech: createStubSpeech(), localAi: async () => ({ llm: true, image: true, upscale: true, faceRef: true }) });
     const r = await request(hdApp).post('/scenes').set('Cookie', cookie).send({ prompt: 'a cat', voice: 'luna', hd: true }).expect(202);
     expect(r.body.scene).toMatchObject({ hd: true });
     expect(sceneCost(true)).toBeGreaterThan(SCENE_COST);

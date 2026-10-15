@@ -2,7 +2,8 @@
 """
 Local AI gateway for AI Media Studio (standard library only, no pip installs).
 
-    POST /image       {"prompt", "negative"?, "width", "height", "seed"?, "steps"?, "upscale"?}
+    POST /image       {"prompt", "negative"?, "width", "height", "seed"?, "steps"?, "upscale"?,
+                       "faceRef"?: base64 PNG/JPEG (<= 4 MB), "faceStrength"?: 0.3..0.9}
                       -> image/png, or with "upscale": true an ESRGAN x4 image/jpeg (long side 1920)
     POST /tts         {"text", "voice", "speed"?}                                   -> audio/wav
     POST /transcribe  raw audio bytes (any format ffmpeg reads), ?language=hi         -> JSON words
@@ -13,6 +14,7 @@ fixed argument lists (no shell), inputs are length-limited, and the GPU is used 
 time (the RTX 3050 has 4 GB). Pictures: stable-diffusion.cpp (Vulkan) + DreamShaper 8 + LCM-LoRA
 (4-6 steps). Voice: Piper. Speech-to-text: whisper.cpp large-v3-turbo.
 """
+import base64
 import hmac
 import json
 import os
@@ -37,6 +39,13 @@ LORA_DIR = os.path.join(ROOT, "models/lora")
 # Measured: anime_6B is 3x faster but paints skin waxy; tile 256 needs 2.7 GB for no speed gain;
 # tile 512 fails on 4 GB.
 ESRGAN_MODEL = os.path.join(ROOT, "models/upscale/RealESRGAN_x4plus.pth")
+# Same face in every shot: IP-Adapter plus-face (SD1.5) + CLIP ViT-H. Measured on the 4 GB GPU:
+# ~25 s per 512x768 picture, 3.2 GB VRAM. Strength 0.65 keeps the face and still follows the scene.
+IPA_MODEL = os.path.join(ROOT, "models/ipadapter/ip-adapter-plus-face_sd15.safetensors")
+IPA_CLIP = os.path.join(ROOT, "models/ipadapter/clip-vision-vit-h.safetensors")
+MAX_FACE_REF = 4 * 1024 * 1024
+# The face adapter pulls outfits towards "glamour" (measured); keep characters dressed as described.
+MODEST_NEGATIVE = "nsfw, nude, cleavage, off-shoulder, bare shoulders, thigh slit, bare legs, revealing clothes, lingerie, sexy"
 UPSCALE_LONG_SIDE = 1920  # final size: enough for a 1080x1920 reel, no wasted bytes
 PIPER_BIN = os.path.join(ROOT, "bin/piper/piper")
 PIPER_DIR = os.path.join(ROOT, "models/piper")
@@ -91,6 +100,19 @@ def make_image(body):
     upscale = body.get("upscale") is True
     if upscale and not os.path.isfile(ESRGAN_MODEL):
         raise ValueError("upscaler not installed (run scripts/local-ai/install.sh)")
+    face = None
+    if body.get("faceRef"):
+        if not (os.path.isfile(IPA_MODEL) and os.path.isfile(IPA_CLIP)):
+            raise ValueError("face reference needs IP-Adapter (run scripts/local-ai/install.sh)")
+        try:
+            face = base64.b64decode(str(body["faceRef"]), validate=True)
+        except Exception:
+            raise ValueError("faceRef must be base64")
+        # Only real PNG/JPEG bytes, never a path or URL.
+        if len(face) > MAX_FACE_REF or not (face[:8] == b"\x89PNG\r\n\x1a\n" or face[:3] == b"\xff\xd8\xff"):
+            raise ValueError("faceRef must be a PNG or JPEG up to 4 MB")
+        negative = f"{negative}, {MODEST_NEGATIVE}"[:700]
+    face_strength = max(0.3, min(0.9, float(body.get("faceStrength", 0.65))))
     with tempfile.TemporaryDirectory() as d:
         out = os.path.join(d, "out.png")
         args = [
@@ -104,6 +126,12 @@ def make_image(body):
             "--vae-tiling",
             "-o", out,
         ]
+        if face is not None:
+            ref = os.path.join(d, "face.img")
+            with open(ref, "wb") as f:
+                f.write(face)
+            args += ["--ip-adapter", IPA_MODEL, "--clip_vision", IPA_CLIP,
+                     "--ip-adapter-image", ref, "--ip-adapter-strength", f"{face_strength:.2f}"]
         with GPU:
             t = time.time()
             run(args, timeout=300)
@@ -209,6 +237,7 @@ class Handler(BaseHTTPRequestHandler):
         if urlparse(self.path).path == "/health":
             self._send(200, {"ok": True, "voices": voices(), "image": os.path.isfile(SD_MODEL) and os.path.isfile(SD_BIN),
                              "upscale": os.path.isfile(ESRGAN_MODEL),
+                             "faceRef": os.path.isfile(IPA_MODEL) and os.path.isfile(IPA_CLIP),
                              "stt": bool(find_whisper()) and os.path.isfile(WHISPER_MODEL)})
         else:
             self._send(404, {"error": "not found"})

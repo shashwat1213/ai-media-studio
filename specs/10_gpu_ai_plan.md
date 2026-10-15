@@ -58,6 +58,30 @@ Each step: measure VRAM/time first, keep the stub path for CI, same job/credit/r
   frame checked: sharp, no upscale blockiness.
 - Seen, not caused by HD: the on-screen title can sit over the character's face (placement is fixed at the top).
 
+## G1 — Same face in every shot: BUILT (15 Oct 2026)
+- IP-Adapter **plus-face SD1.5** (98 MB) + **CLIP ViT-H** image encoder (2.5 GB), run by the same `sd-cli`
+  (`--ip-adapter --clip_vision --ip-adapter-image --ip-adapter-strength`). Measured: ~25 s per 512×768, **3.2 GB VRAM**.
+- Strength tests on an AI-generated reference: 0.7 = strongest likeness but outfits drift bold; 0.55 = worse (slits,
+  sleeveless); **0.65 + a modesty negative = same face, scene followed, dressed as described** (default).
+  The adapter pulls outfits towards "glamour"; the gateway always adds a modesty negative when a face is used.
+- Consent is enforced server-side: CHARACTER `settings.faceRef` needs `faceConsent` ∈ self / consented / ai_generated
+  AND a photo, on create and update. The producer only sends the face if the upload is still the user's own READY
+  PNG/JPEG (a forged id in the library row sends nothing). Gateway accepts only base64 PNG/JPEG ≤ 4 MB, never a path.
+- Web: Library → Character → "Same face in every shot": upload photo, pick "Me / Someone who agreed / AI-generated".
+- E2E (Chrome, local AI): AI-generated "Riya" → 3-shot Goa scene, READY 140 s, same face in all 3 (frames checked),
+  render 5.1 s. Tests: +4 (consent rules, face bytes reach every shot, forged id ignored, gateway body). 265 pass.
+
+## Text-to-video (moving character) — choosing the model for 4 GB (15 Oct 2026)
+| Model | Size (quant) | 4 GB? | Verdict |
+|---|---|---|---|
+| Wan 2.1 T2V **1.3B** | 1.6 GB Q8 GGUF + umt5 Q4 3.7 GB (CPU) + VAE 0.25 GB | Likely (480p, 33 frames) | **First pick**: best quality/size, sd-cli supports it |
+| Wan 2.1 **VACE 1.3B** | 1.7 GB Q5_K_M | Likely | **Second**: reference image → video = OUR character moving |
+| CausVid LoRA (1.3B) | 90 MB | — | 4–8 steps instead of 30: the speed trick |
+| Wan 2.2 TI2V 5B | 3.4 GB Q4 | Tight, slow | Later, if 1.3B quality isn't enough |
+| LTX-Video 2B | ~4 GB | 6 GB min | Skip for now |
+| Wan 14B / Hunyuan | 10+ GB | No | Paid/cloud only |
+| AnimateDiff SD1.5 | 1.7 GB | Yes | Fallback: short loops, weaker motion |
+
 ## Honest limits
 - 4 GB is the ceiling: one model at a time; video models are the stretch goal, not a promise.
 - Disk: models live on /mnt/ubuntu-storage (600+ GB free); each step lists its download size before it starts.

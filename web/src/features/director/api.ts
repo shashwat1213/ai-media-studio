@@ -55,7 +55,7 @@ export interface ScenesConfig {
   cost: number;
   limits: { shots: number; maxTotalS: number; prompt: number };
   voices: Voice[];
-  localAi: { llm: boolean; image: boolean; upscale: boolean };
+  localAi: { llm: boolean; image: boolean; upscale: boolean; faceRef: boolean };
   hdCost: number;
 }
 
@@ -73,7 +73,7 @@ export function useSaveItem() {
       item.id
         ? api<{ item: LibraryItem }>(`/library/${item.id}`, {
             method: 'PATCH',
-            body: JSON.stringify({ handle: item.handle, name: item.name, description: item.description, settings: item.settings }),
+            body: JSON.stringify({ handle: item.handle, name: item.name, description: item.description, settings: item.settings, imageUploadId: item.imageUploadId }),
           })
         : api<{ item: LibraryItem }>('/library', { method: 'POST', body: JSON.stringify(item) }),
     onSuccess: () => qc.invalidateQueries({ queryKey: libraryKey }),

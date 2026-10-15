@@ -104,7 +104,7 @@ export function createApp({ prisma, config, logger, metrics, queue, storage, red
         jwtSecret: config.jwtSecret,
         voices: () => voices.voices,
         enqueueScene: queue.enqueueScene?.bind(queue),
-        localAi: localAi ?? (async () => ({ llm: false, image: false, upscale: false })),
+        localAi: localAi ?? (async () => ({ llm: false, image: false, upscale: false, faceRef: false })),
         rateLimit: config.generateRateLimit,
       }),
     );

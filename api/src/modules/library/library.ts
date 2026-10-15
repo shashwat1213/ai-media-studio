@@ -15,6 +15,12 @@ export const SETTINGS = {
   CHARACTER: z.object({
     /** Fixed seed for this character's pictures: same seed + same description = closer look. */
     seed: z.number().int().min(0).max(2 ** 31 - 1).optional(),
+    /**
+     * The item's image is used as a FACE REFERENCE (same face in every shot). Only allowed with an
+     * explicit consent statement: the photo is of the user, of someone who agreed, or AI-generated.
+     */
+    faceRef: z.boolean().optional(),
+    faceConsent: z.enum(['self', 'consented', 'ai_generated']).optional(),
     /** The voice they speak with (a VOICE item's handle). */
     voice: z.string().regex(HANDLE_RE).optional(),
   }),
@@ -99,6 +105,10 @@ export function createLibraryService(deps: {
   const { prisma } = deps;
 
   async function checkRefs(userId: string, kind: LibraryKind, settings: Record<string, unknown>, imageUploadId?: string | null) {
+    if (kind === 'CHARACTER' && settings.faceRef === true) {
+      if (!settings.faceConsent) throw new HttpError(400, 'A face reference needs your confirmation that the photo is you, someone who agreed, or AI-generated');
+      if (!imageUploadId) throw new HttpError(400, 'A face reference needs a photo');
+    }
     if (kind === 'VOICE' && deps.voiceExists) {
       const s = settings as z.infer<typeof SETTINGS.VOICE>;
       if (!deps.voiceExists(s.engine, s.voice)) throw new HttpError(400, `Voice "${s.voice}" is not available on ${s.engine}`);
@@ -151,7 +161,7 @@ export function createLibraryService(deps: {
       const settings = patch.settings
         ? (SETTINGS[cur.kind] as z.ZodTypeAny).parse({ ...(cur.settings as object), ...patch.settings })
         : (cur.settings as Record<string, unknown>);
-      await checkRefs(userId, cur.kind, settings, patch.imageUploadId);
+      await checkRefs(userId, cur.kind, settings, patch.imageUploadId === undefined ? cur.imageUploadId : patch.imageUploadId);
       try {
         const row = await prisma.libraryItem.update({
           where: { id },

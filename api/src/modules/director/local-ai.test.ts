@@ -69,6 +69,17 @@ describe('local pictures (stable-diffusion.cpp gateway)', () => {
     expect(JSON.parse(seen[1]!.body.toString())).not.toHaveProperty('upscale');
   });
 
+  it('face reference goes to the gateway as base64 with a strength; absent when not given', async () => {
+    reply = () => ({ headers: { 'content-type': 'image/png' }, body: 'x' });
+    const pics = createLocalPictures({ baseUrl: base, token: TOKEN });
+    await pics.picture({ prompt: 'p', width: 64, height: 64, faceRef: Buffer.from([1, 2, 3]) });
+    expect(JSON.parse(seen[0]!.body.toString())).toMatchObject({ faceRef: 'AQID', faceStrength: 0.65 });
+    await pics.picture({ prompt: 'p', width: 64, height: 64, faceRef: Buffer.from([1]), faceStrength: 0.5 });
+    expect(JSON.parse(seen[1]!.body.toString()).faceStrength).toBe(0.5);
+    await pics.picture({ prompt: 'p', width: 64, height: 64 });
+    expect(JSON.parse(seen[2]!.body.toString())).not.toHaveProperty('faceRef');
+  });
+
   it('hdSize: long side 1920, even, same shape', () => {
     expect(hdSize(512, 768)).toEqual({ width: 1280, height: 1920 });
     expect(hdSize(768, 448)).toEqual({ width: 1920, height: 1120 });
@@ -233,16 +244,16 @@ describe('wiring from env', () => {
     let upscale = true;
     reply = (s) =>
       s.auth === `Bearer ${TOKEN}` && s.url === '/health'
-        ? { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ok: true, upscale }) }
+        ? { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ok: true, upscale, faceRef: upscale }) }
         : { status: 401 };
-    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: `${base}/`, LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: true, image: true, upscale: true });
+    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: `${base}/`, LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: true, image: true, upscale: true, faceRef: true });
     upscale = false;
-    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: base, LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: true, image: true, upscale: false });
+    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: base, LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: true, image: true, upscale: false, faceRef: false });
     reply = () => ({ status: 200, body: 'not json' }); // llama-server style health: still "up", no upscale claim
-    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: base, LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: true, image: true, upscale: false });
+    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: base, LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: true, image: true, upscale: false, faceRef: false });
     reply = (s) => ({ status: s.auth === `Bearer ${TOKEN}` ? 200 : 401 });
-    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: base, LOCAL_AI_TOKEN: 'wrong-token-0123456789' }))).toEqual({ llm: false, image: false, upscale: false });
-    expect(await localAiStatus(env({ LOCAL_LLM_URL: 'http://127.0.0.1:1', LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: false, image: false, upscale: false });
-    expect(await localAiStatus(env({ LOCAL_LLM_URL: base }))).toEqual({ llm: false, image: false, upscale: false });
+    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: base, LOCAL_AI_TOKEN: 'wrong-token-0123456789' }))).toEqual({ llm: false, image: false, upscale: false, faceRef: false });
+    expect(await localAiStatus(env({ LOCAL_LLM_URL: 'http://127.0.0.1:1', LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: false, image: false, upscale: false, faceRef: false });
+    expect(await localAiStatus(env({ LOCAL_LLM_URL: base }))).toEqual({ llm: false, image: false, upscale: false, faceRef: false });
   });
 });

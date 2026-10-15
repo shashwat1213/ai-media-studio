@@ -83,6 +83,24 @@ describe('library API', () => {
     expect(r.body.error).toMatch(/file not found/);
   });
 
+  it('face reference needs a consent statement and a photo (create and update)', async () => {
+    const c = await user();
+    const me = await prisma.user.findFirstOrThrow({ orderBy: { createdAt: 'desc' } });
+    const img = await prisma.upload.create({ data: { userId: me.id, status: 'READY', storageKey: `uploads/${me.id}/r.png`, fileName: 'r.png', mimeType: 'image/png', bytes: 1 } });
+    const post = (body: object) => request(app).post('/library').set('Cookie', c).send({ kind: 'CHARACTER', name: 'Riya', ...body });
+    const noConsent = await post({ handle: 'r1', imageUploadId: img.id, settings: { faceRef: true } });
+    expect(noConsent.status).toBe(400);
+    expect(noConsent.body.error).toMatch(/confirmation/);
+    expect((await post({ handle: 'r2', settings: { faceRef: true, faceConsent: 'self' } })).status).toBe(400); // no photo
+    expect((await post({ handle: 'r3', imageUploadId: img.id, settings: { faceRef: true, faceConsent: 'stolen' } })).status).toBe(400);
+    const ok = await post({ handle: 'r4', imageUploadId: img.id, settings: { faceRef: true, faceConsent: 'ai_generated' } }).expect(201);
+    expect(ok.body.item.settings).toMatchObject({ faceRef: true, faceConsent: 'ai_generated' });
+    // update: removing the photo while the face reference is on is refused
+    expect((await request(app).patch(`/library/${ok.body.item.id}`).set('Cookie', c).send({ imageUploadId: null })).status).toBe(400);
+    // a plain character (no face reference) still needs nothing
+    await post({ handle: 'r5', settings: {} }).expect(201);
+  });
+
   it('DB backs the rules: a lower-case slug handle and an object settings column', async () => {
     const u = await prisma.user.create({ data: { email: `db${Math.random()}@x.com`, passwordHash: 'x' } });
     await expect(prisma.libraryItem.create({ data: { userId: u.id, kind: 'PLACE', handle: 'Bad Handle', name: 'x', description: '' } })).rejects.toThrow(/LibraryItem_handle_check/);
