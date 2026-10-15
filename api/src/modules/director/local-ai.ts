@@ -1,4 +1,5 @@
 import { ProviderError } from '../generation/providers/types.js';
+import { Agent, fetch as undiciFetch } from 'undici';
 import { AURA_VOICES, parseWhisper, type SpeechProvider, type Voice } from '../audio/speech.js';
 
 /**
@@ -20,8 +21,15 @@ const down = (err: unknown) =>
     userMessage: 'The local AI is not running. Start it with scripts/local-ai/start.sh.',
   });
 
+/**
+ * Node's fetch (undici) gives up on a response whose HEADERS take > 300 s ("fetch failed"), whatever
+ * our AbortSignal says. AI-video clips take ~7 min before the first byte, so the local-AI client uses
+ * its own dispatcher with those limits off; our per-request AbortSignal timeout is the only limit.
+ */
+const longCalls = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
+
 function client(o: LocalAiOptions) {
-  const doFetch = o.fetchImpl ?? fetch;
+  const doFetch = o.fetchImpl ?? ((url: string, init: RequestInit) => undiciFetch(url, { ...(init as object), dispatcher: longCalls } as never) as unknown as Promise<Response>);
   return async (path: string, init: RequestInit & { timeoutMs?: number; signal?: AbortSignal }) => {
     const t = AbortSignal.timeout(init.timeoutMs ?? o.timeoutMs ?? 300_000);
     let res: Response;

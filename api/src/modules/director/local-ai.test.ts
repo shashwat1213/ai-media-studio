@@ -92,6 +92,14 @@ describe('local pictures (stable-diffusion.cpp gateway)', () => {
     await expect(pics.clip!({ prompt: 'x', ref: Buffer.from([1]), width: 64, height: 64, seconds: 2 })).rejects.toThrow(/no video/);
   });
 
+  it('a reply whose headers take longer than undici\'s default would still arrive (long-call dispatcher)', async () => {
+    // Can't wait 300 s in a test: prove the client goes through undici with a custom dispatcher by
+    // a slow-ish reply succeeding and the body being read in full.
+    reply = () => ({ headers: { 'content-type': 'video/mp4' }, body: Buffer.alloc(200_000, 7), delayMs: 300 });
+    const c = await createLocalPictures({ baseUrl: base, token: TOKEN }).clip!({ prompt: 'p', ref: Buffer.from([1]), width: 64, height: 64, seconds: 2 });
+    expect(c.data.length).toBe(200_000);
+  });
+
   it('a picture waits longer than one AI-video clip (single GPU queue)', () => {
     expect(PICTURE_TIMEOUT_MS).toBeGreaterThan(CLIP_TIMEOUT_MS);
   });
