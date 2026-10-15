@@ -94,6 +94,15 @@ Each step: measure VRAM/time first, keep the stub path for CI, same job/credit/r
 - Limits: ~2–3 s per clip, 480p, ~1.5 min of GPU per second of video. Identity is from the TEXT only (no face
   reference yet) → next: **VACE 1.3B** with the library character's reference image.
 
+### Reference-to-video: OUR character moving (Wan 2.1 VACE 1.3B, 15 Oct 2026)
+- Model: `wan2.1-v3-vace-1.3b-q5_0.gguf` (calcuis, 1.6 GB). **Pitfall:** the un-versioned `wan2.1-vace-1.3b-*`
+  quants are missing `vace_patch_embedding.weight` → sd-cli refuses ("not in model metadata"); the `v2`/`v3` files
+  are complete (checked by reading the GGUF tensor table over an HTTP range request before downloading).
+- Same flags as T2V plus `-i reference.png`. 33 frames, 8 steps, CausVid: **435 s**, peak VRAM 3.2 GB.
+- Result (AI-generated reference "Riya"): same face, bindi, hair and yellow kurta; real motion (arms out, spin,
+  dress swirls) on a beach at sunset. Clearly better identity than text-only T2V.
+- Cost: ~3.5 min of GPU per second of video. A 15 s reel ≈ 5 clips ≈ 35–40 min → background job, not interactive.
+
 ## Honest limits
 - 4 GB is the ceiling: one model at a time; video models are the stretch goal, not a promise.
 - Disk: models live on /mnt/ubuntu-storage (600+ GB free); each step lists its download size before it starts.
