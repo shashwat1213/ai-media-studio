@@ -3,7 +3,7 @@
 # Layout: ~/.local/share/ams-ai/{bin/<engine>, models/<kind>}
 set -euo pipefail
 ROOT="${AMS_AI_HOME:-$HOME/.local/share/ams-ai}"
-mkdir -p "$ROOT"/bin "$ROOT"/models/{llm,sd,lora,piper,upscale,ipadapter} "$ROOT"/tmp
+mkdir -p "$ROOT"/bin "$ROOT"/models/{llm,sd,lora,piper,upscale,ipadapter,wan} "$ROOT"/tmp
 cd "$ROOT/tmp"
 
 dl() { # url dest  (resumes .part files; only renames after curl reports success)
@@ -49,6 +49,12 @@ dl "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x
 # Same face in every shot: IP-Adapter plus-face SD1.5 (Apache-2.0, 98 MB) + CLIP ViT-H image encoder (2.5 GB)
 dl "$HF/h94/IP-Adapter/resolve/main/models/ip-adapter-plus-face_sd15.safetensors" "$ROOT/models/ipadapter/ip-adapter-plus-face_sd15.safetensors"
 dl "$HF/h94/IP-Adapter/resolve/main/models/image_encoder/model.safetensors" "$ROOT/models/ipadapter/clip-vision-vit-h.safetensors"
+# Moving shots (~7 GB): Wan 2.1 VACE 1.3B (use the v3 quant: the un-versioned ones miss vace_patch_embedding),
+# VAE, umt5-xxl text encoder (runs on CPU), CausVid LoRA (6-8 steps).
+dl "$HF/calcuis/wan-1.3b-gguf/resolve/main/wan2.1-v3-vace-1.3b-q5_0.gguf" "$ROOT/models/wan/wan2.1-v3-vace-1.3b-q5_0.gguf"
+dl "$HF/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors" "$ROOT/models/wan/wan_2.1_vae.safetensors"
+dl "$HF/city96/umt5-xxl-encoder-gguf/resolve/main/umt5-xxl-encoder-Q4_K_M.gguf" "$ROOT/models/wan/umt5-xxl-Q4_K_M.gguf"
+dl "$HF/Kijai/WanVideo_comfy/resolve/main/Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors" "$ROOT/models/wan/causvid_1_3b_lora.safetensors"
 mkdir -p "$ROOT/models/whisper"
 dl "$HF/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin" "$ROOT/models/whisper/large-v3-turbo-q5_0.bin"
 dl "$HF/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf" "$ROOT/models/llm/gemma3-4b-it-q4km.gguf"

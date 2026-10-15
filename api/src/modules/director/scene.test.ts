@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import pino from 'pino';
@@ -7,8 +8,8 @@ import { createStubSpeech } from '../audio/speech.js';
 import { EditRequestSchema, normaliseEdit, type UploadInfo } from '../editor/edit-spec.js';
 import type { PublicItem } from '../library/library.js';
 import { createStubDirector, type DirectorModel } from './director.js';
-import { alignCaptionWords, buildDraft, faceCharacterFor, imagePromptFor, pickSound, produceScene, shotStarts, type SceneScript } from './scene.js';
-import { failAndRefund, SCENE_COST, sceneCost } from './scenes.routes.js';
+import { alignCaptionWords, buildDraft, shotLength, faceCharacterFor, imagePromptFor, pickSound, produceScene, shotStarts, type SceneScript } from './scene.js';
+import { failAndRefund, SCENE_COST, sceneCost, SCENE_AI_MOTION_EXTRA, SCENE_HD_EXTRA } from './scenes.routes.js';
 import { picturesFromEnv } from './index.js';
 import type { PictureEngine, PictureRequest } from './local-ai.js';
 import type { SharedEnv } from '../../config/env.js';
@@ -182,6 +183,55 @@ describe('produceScene (stub engines, real DB + storage + ffmpeg)', () => {
     expect(asked.every((r) => !r.faceRef)).toBe(true);
   }, 60_000);
 
+  it('AI video scene: every shot gets a moving clip exactly its length, the draft uses the clips, a retry keeps them', async () => {
+    const u = await userWithLibrary();
+    const s = await prisma.scene.create({ data: { userId: u.id, prompt: '@riya walks. A sunset over the sea.', language: 'en', format: '9:16', targetS: 8, voice: 'narrator', motion: 'ai' } });
+    const clips: { prompt: string; seconds: number; refBytes: number }[] = [];
+    const engine: PictureEngine = { ...stubPictures, name: 'spy', clip: (r, sig) => (clips.push({ prompt: r.prompt, seconds: r.seconds, refBytes: r.ref.length }), stubPictures.clip!(r, sig)) };
+    expect(await produceScene(s.id, deps(createStubDirector(), engine))).toBe('ready');
+    const done = await prisma.scene.findUniqueOrThrow({ where: { id: s.id } });
+    const shots = (done.script as unknown as SceneScript).shots;
+    expect(clips.length).toBe(shots.length);
+    expect(clips.every((c) => c.refBytes > 0 && c.prompt.length > 0)).toBe(true);
+    for (const sh of shots) {
+      const v = await prisma.upload.findUniqueOrThrow({ where: { id: sh.videoUploadId! } });
+      expect(v).toMatchObject({ userId: u.id, source: 'AI_VIDEO', mimeType: 'video/mp4', hasAudio: false });
+      expect(Math.abs((v.durationMs ?? 0) / 1000 - shotLength(sh))).toBeLessThan(0.15); // the clip covers its shot
+    }
+    expect(clips.map((c) => c.seconds)).toEqual(shots.map((sh) => shotLength(sh)));
+    const draftClips = (done.draft as { clips: { uploadId: string; trimEndS?: number; motion?: string }[] }).clips;
+    expect(draftClips.map((c) => c.uploadId)).toEqual(shots.map((sh) => sh.videoUploadId));
+    expect(draftClips.every((c) => c.motion === undefined && c.trimEndS! > 0)).toBe(true);
+
+    // Resumable: fail it, retry -> the existing clips are reused, not re-made.
+    await prisma.scene.update({ where: { id: s.id }, data: { status: 'PRODUCING', draft: Prisma.DbNull } });
+    clips.length = 0;
+    expect(await produceScene(s.id, deps(createStubDirector(), engine))).toBe('ready');
+    expect(clips).toHaveLength(0);
+
+    // still scenes never ask for clips
+    const still = await prisma.scene.create({ data: { userId: u.id, prompt: '@riya smiles.', language: 'en', format: '1:1', targetS: 6, voice: 'narrator' } });
+    expect(await produceScene(still.id, deps(createStubDirector(), engine))).toBe('ready');
+    expect(clips).toHaveLength(0);
+  }, 90_000);
+
+  it('AI video scene without a video engine fails with a clear message', async () => {
+    const u = await userWithLibrary();
+    const s = await prisma.scene.create({ data: { userId: u.id, prompt: '@riya walks.', language: 'en', format: '9:16', targetS: 6, voice: 'narrator', motion: 'ai' } });
+    const noClip: PictureEngine = { name: 'pics', picture: stubPictures.picture };
+    expect(await produceScene(s.id, deps(createStubDirector(), noClip))).toBe('failed');
+    expect((await prisma.scene.findUniqueOrThrow({ where: { id: s.id } })).error).toMatch(/AI video is not available/);
+  });
+
+  it('buildDraft: a shot with a moving clip uses the clip (trimmed to the shot), others keep the picture + camera move', () => {
+    const base = { visual: 'v', camera: 'zoomin' as const, durationS: 3, narration: '', roman: '', sound: '', onScreen: '', uses: [] };
+    const d = buildDraft({ title: 't', mood: 'calm', shots: [{ ...base, imageUploadId: 'img1', videoUploadId: 'vid1' }, { ...base, imageUploadId: 'img2' }] } as unknown as SceneScript);
+    expect(d.clips).toEqual([
+      { uploadId: 'vid1', trimStartS: 0, trimEndS: 3, fit: 'cover', volume: 0 },
+      { uploadId: 'img2', durationS: 3, fit: 'cover', motion: 'zoom-in' },
+    ]);
+  });
+
   it('a fast (non-HD) scene never asks for an upscale', async () => {
     const u = await userWithLibrary();
     const s = await prisma.scene.create({ data: { userId: u.id, prompt: '@riya walks.', language: 'en', format: '1:1', targetS: 6, voice: 'narrator' } });
@@ -212,7 +262,7 @@ describe('scenes API', () => {
   it('create: validates, charges, enqueues; config lists voices; others cannot see it', async () => {
     const { cookie, user } = await login();
     const cfg = await request(app).get('/scenes/config').set('Cookie', cookie).expect(200);
-    expect(cfg.body).toMatchObject({ cost: SCENE_COST, hdCost: sceneCost(true), localAi: { llm: false, image: false, upscale: false, faceRef: false } });
+    expect(cfg.body).toMatchObject({ cost: SCENE_COST, hdCost: sceneCost(true), localAi: { llm: false, image: false, upscale: false, faceRef: false, video: false } });
     expect((await request(app).post('/scenes').set('Cookie', cookie).send({ prompt: 'a cat', voice: 'nobody' })).status).toBe(400);
     expect((await request(app).post('/scenes').set('Cookie', cookie).send({ prompt: 'x', voice: 'luna' })).status).toBe(400);
     const r = await request(app).post('/scenes').set('Cookie', cookie).send({ prompt: 'a cat in Goa', voice: 'luna', targetS: 15 }).expect(202);
@@ -275,7 +325,7 @@ describe('scenes API', () => {
     expect(await bal()).toBe(50);
     expect(await prisma.scene.count({ where: { userId: user.id } })).toBe(0);
 
-    const hdApp = createApp({ prisma, config: testConfig, queue: { ...fakeQueue(), enqueueScene: async () => {} }, storage, speech: createStubSpeech(), localAi: async () => ({ llm: true, image: true, upscale: true, faceRef: true }) });
+    const hdApp = createApp({ prisma, config: testConfig, queue: { ...fakeQueue(), enqueueScene: async () => {} }, storage, speech: createStubSpeech(), localAi: async () => ({ llm: true, image: true, upscale: true, faceRef: true, video: true }) });
     const r = await request(hdApp).post('/scenes').set('Cookie', cookie).send({ prompt: 'a cat', voice: 'luna', hd: true }).expect(202);
     expect(r.body.scene).toMatchObject({ hd: true });
     expect(sceneCost(true)).toBeGreaterThan(SCENE_COST);
@@ -286,6 +336,36 @@ describe('scenes API', () => {
     expect(await bal()).toBe(50 - sceneCost(true));
     const sum = await prisma.creditTransaction.aggregate({ where: { userId: user.id }, _sum: { delta: true } });
     expect(sum._sum.delta).toBe(await bal()); // ledger == balance
+  });
+
+  it('content policy: a sexual brief is refused (400) before anything is charged or queued', async () => {
+    const { cookie, user } = await login();
+    const r = await request(app).post('/scenes').set('Cookie', cookie).send({ prompt: 'a girl showing tits', voice: 'luna' });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/does not make sexual or nude content/);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).credits).toBe(50);
+    expect(await prisma.scene.count({ where: { userId: user.id } })).toBe(0);
+  });
+
+  it('AI video: refused (409, nothing charged) without the Wan models; with them charged the AI price; retry charges it again', async () => {
+    const { cookie, user } = await login();
+    const bal = async () => (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).credits;
+    expect((await request(app).post('/scenes').set('Cookie', cookie).send({ prompt: 'a cat', voice: 'luna', motion: 'ai' })).status).toBe(409);
+    expect(await bal()).toBe(50);
+    expect((await request(app).post('/scenes').set('Cookie', cookie).send({ prompt: 'a cat', voice: 'luna', motion: 'warp' })).status).toBe(400);
+    const vidApp = createApp({ prisma, config: testConfig, queue: { ...fakeQueue(), enqueueScene: async () => {} }, storage, speech: createStubSpeech(), localAi: async () => ({ llm: true, image: true, upscale: false, faceRef: false, video: true }) });
+    const r = await request(vidApp).post('/scenes').set('Cookie', cookie).send({ prompt: 'a cat', voice: 'luna', motion: 'ai' }).expect(202);
+    expect(r.body.scene).toMatchObject({ motion: 'ai', hd: false });
+    expect(sceneCost(false, 'ai')).toBe(SCENE_COST + SCENE_AI_MOTION_EXTRA);
+    expect(await bal()).toBe(50 - sceneCost(false, 'ai'));
+    expect(await failAndRefund(prisma, r.body.scene.id, 'boom')).toBe(true);
+    expect(await bal()).toBe(50);
+    await request(vidApp).post(`/scenes/${r.body.scene.id}/retry`).set('Cookie', cookie).expect(202);
+    expect(await bal()).toBe(50 - sceneCost(false, 'ai'));
+    // HD + AI video stack
+    expect(sceneCost(true, 'ai')).toBe(SCENE_COST + SCENE_HD_EXTRA + SCENE_AI_MOTION_EXTRA);
+    const cfg = await request(vidApp).get('/scenes/config').set('Cookie', cookie).expect(200);
+    expect(cfg.body).toMatchObject({ aiMotionExtra: SCENE_AI_MOTION_EXTRA, localAi: { video: true } });
   });
 
   it('voice-over language: Auto follows the brief; the narrator always speaks that language', async () => {

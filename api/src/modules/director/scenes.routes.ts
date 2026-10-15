@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { checkContent } from './content-policy.js';
 import rateLimit from 'express-rate-limit';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { z } from 'zod';
@@ -17,7 +18,10 @@ import { DEFAULT_NARRATOR, voiceLanguage } from './local-ai.js';
 export const SCENE_COST = 5;
 /** Extra for HD pictures: ~31 s of GPU per shot for the x4 upscale (vs ~12 s for the picture). */
 export const SCENE_HD_EXTRA = 3;
-export const sceneCost = (hd: boolean) => SCENE_COST + (hd ? SCENE_HD_EXTRA : 0);
+/** Extra for AI video: ~7 min of GPU per shot (Wan VACE) vs ~25 s for a picture. */
+export const SCENE_AI_MOTION_EXTRA = 10;
+export type SceneMotion = 'still' | 'ai';
+export const sceneCost = (hd: boolean, motion: SceneMotion = 'still') => SCENE_COST + (hd ? SCENE_HD_EXTRA : 0) + (motion === 'ai' ? SCENE_AI_MOTION_EXTRA : 0);
 
 const CreateScene = z.object({
   prompt: z.string().trim().min(3, 'Describe the scene').max(DIRECTOR_LIMITS.prompt),
@@ -29,6 +33,8 @@ const CreateScene = z.object({
   voice: z.string().min(2).max(60).optional(),
   /** HD pictures (GPU x4 upscale). Needs the upscaler installed in the local AI. */
   hd: z.boolean().default(false),
+  /** 'ai' = every shot animated by the local AI (Wan VACE). Slow (~7 min per shot); needs the Wan models. */
+  motion: z.enum(['still', 'ai']).default('still'),
 });
 const IdParam = z.object({ id: z.string().uuid() });
 const parseId = (p: unknown) => {
@@ -37,7 +43,7 @@ const parseId = (p: unknown) => {
   return r.data.id;
 };
 
-const publicScene = (s: { id: string; prompt: string; language: string; format: string; targetS: number; voice: string; hd: boolean; status: string; title: string | null; script: unknown; draft: unknown; progress: string | null; error: string | null; createdAt: Date; updatedAt: Date }) => s;
+const publicScene = (s: { id: string; prompt: string; language: string; format: string; targetS: number; voice: string; hd: boolean; motion: string; status: string; title: string | null; script: unknown; draft: unknown; progress: string | null; error: string | null; createdAt: Date; updatedAt: Date }) => s;
 
 export function scenesRouter(opts: {
   prisma: PrismaClient;
@@ -45,7 +51,7 @@ export function scenesRouter(opts: {
   jwtSecret: string;
   voices: () => Voice[];
   enqueueScene?: (sceneId: string, attempt: string) => Promise<void>;
-  localAi: () => Promise<{ llm: boolean; image: boolean; upscale: boolean; faceRef: boolean }>;
+  localAi: () => Promise<{ llm: boolean; image: boolean; upscale: boolean; faceRef: boolean; video: boolean }>;
   rateLimit: number;
 }): Router {
   const { prisma } = opts;
@@ -53,8 +59,8 @@ export function scenesRouter(opts: {
 
   /** Scene + signed URLs for its shots' pictures (only this user's uploads). */
   async function withImages<T extends { userId: string; script: unknown }>(s: T) {
-    const shots = ((s.script as { shots?: { imageUploadId?: string }[] } | null)?.shots ?? []);
-    const ids = shots.map((x) => x.imageUploadId).filter((x): x is string => Boolean(x));
+    const shots = ((s.script as { shots?: { imageUploadId?: string; videoUploadId?: string }[] } | null)?.shots ?? []);
+    const ids = shots.flatMap((x) => [x.imageUploadId, x.videoUploadId]).filter((x): x is string => Boolean(x));
     const rows = ids.length ? await prisma.upload.findMany({ where: { id: { in: ids }, userId: s.userId, status: 'READY' }, select: { id: true, storageKey: true } }) : [];
     const images: Record<string, string> = {};
     await Promise.all(rows.map(async (r) => (images[r.id] = await opts.storage.signedUrl(r.storageKey))));
@@ -66,7 +72,7 @@ export function scenesRouter(opts: {
   const limiter = rateLimit({ windowMs: 60_000, limit: opts.rateLimit, standardHeaders: 'draft-8', legacyHeaders: false, keyGenerator: (req) => req.userId!, message: { error: 'Too many requests, slow down' } });
 
   router.get('/scenes/config', auth, async (_req, res) => {
-    res.json({ cost: SCENE_COST, hdCost: sceneCost(true), limits: DIRECTOR_LIMITS, voices: opts.voices(), localAi: await opts.localAi() });
+    res.json({ cost: SCENE_COST, hdCost: sceneCost(true), aiMotionExtra: SCENE_AI_MOTION_EXTRA, limits: DIRECTOR_LIMITS, voices: opts.voices(), localAi: await opts.localAi() });
   });
 
   router.get('/scenes', auth, async (req, res) => {
@@ -95,6 +101,8 @@ export function scenesRouter(opts: {
   router.post('/scenes', auth, limiter, async (req, res) => {
     const input = CreateScene.parse(req.body);
     const userId = req.userId!;
+    const policy = checkContent(input.prompt);
+    if (!policy.ok) throw new HttpError(400, policy.reason!);
     const language = input.language === 'auto' ? detectLanguage(input.prompt).language : input.language;
     const spoken = spokenLanguage(language);
     // The voice must exist (a VOICE item of this user, or a known voice id) AND speak the scene's
@@ -113,10 +121,12 @@ export function scenesRouter(opts: {
       throw tooManyRequests('Two scenes are already being made. Wait for one to finish.');
     }
     // Don't charge for HD the machine can't make (checked again by the worker; a failure refunds).
-    if (input.hd && !(await opts.localAi()).upscale) throw new HttpError(409, 'HD pictures need the upscaler. Run scripts/local-ai/install.sh and start the local AI.');
+    const ai = input.hd || input.motion === 'ai' ? await opts.localAi() : null;
+    if (input.hd && !ai!.upscale) throw new HttpError(409, 'HD pictures need the upscaler. Run scripts/local-ai/install.sh and start the local AI.');
+    if (input.motion === 'ai' && !ai!.video) throw new HttpError(409, 'AI video needs the Wan models. Run scripts/local-ai/install.sh and start the local AI.');
     const scene = await prisma.$transaction(async (tx) => {
-      const s = await tx.scene.create({ data: { userId, prompt: input.prompt, language, format: input.format, targetS: input.targetS, hd: input.hd, voice: item && voice === input.voice ? item.handle : voice! } });
-      await applyDebit(tx, userId, sceneCost(s.hd), 'GENERATION', `scene:${s.id}`);
+      const s = await tx.scene.create({ data: { userId, prompt: input.prompt, language, format: input.format, targetS: input.targetS, hd: input.hd, motion: input.motion, voice: item && voice === input.voice ? item.handle : voice! } });
+      await applyDebit(tx, userId, sceneCost(s.hd, s.motion as SceneMotion), 'GENERATION', `scene:${s.id}`);
       return s;
     });
     await start(userId, scene.id, '1');
@@ -131,8 +141,8 @@ export function scenesRouter(opts: {
     const ok = await prisma.$transaction(async (tx) => {
       const { count } = await tx.scene.updateMany({ where: { id, userId, status: 'FAILED' }, data: { status: 'PLANNING', error: null, progress: 'Queued…' } });
       if (count === 0) return false;
-      const { hd } = await tx.scene.findUniqueOrThrow({ where: { id }, select: { hd: true } });
-      await applyDebit(tx, userId, sceneCost(hd), 'GENERATION', `scene:${id}:${attempt}`);
+      const { hd, motion } = await tx.scene.findUniqueOrThrow({ where: { id }, select: { hd: true, motion: true } });
+      await applyDebit(tx, userId, sceneCost(hd, motion as SceneMotion), 'GENERATION', `scene:${id}:${attempt}`);
       return true;
     });
     if (!ok) throw new HttpError(409, 'Only a failed scene can be retried');

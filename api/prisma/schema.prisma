@@ -149,6 +149,8 @@ enum UploadSource {
   TTS
   /// A picture made by the Scene Director.
   AI_IMAGE
+  /// A moving shot made by the Scene Director (Wan VACE: the shot's picture, animated).
+  AI_VIDEO
 }
 
 /// Speech-to-text on an upload's audio (runs in the worker; long files take a while).
@@ -252,6 +254,8 @@ model Scene {
   targetS   Int
   /// HD pictures: each shot is upscaled x4 on the GPU (Real-ESRGAN) to a 1920px long side. Costs extra.
   hd        Boolean     @default(false)
+  /// 'still' = pictures with camera moves (fast); 'ai' = every shot animated by local AI video (slow, costs more).
+  motion    String      @default("still")
   /// Library handle of the narrator voice (or a raw voice id), chosen at creation.
   voice     String
   status    SceneStatus @default(PLANNING)

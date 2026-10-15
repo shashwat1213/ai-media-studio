@@ -77,10 +77,35 @@ export interface Picture {
   width: number;
   height: number;
 }
+export interface ClipRequest {
+  /** What happens in the shot (the director's visual line). */
+  prompt: string;
+  /** The shot's picture: the clip starts from (and keeps) this look and character. */
+  ref: Buffer;
+  width: number;
+  height: number;
+  /** Final clip length; the gateway loops the ~2 s of AI motion forward/backward to fill it. */
+  seconds: number;
+  seed?: number;
+}
+export interface Clip {
+  data: Buffer;
+  mimeType: 'video/mp4';
+  width: number;
+  height: number;
+}
+
 export interface PictureEngine {
   readonly name: string;
   picture(req: PictureRequest, signal?: AbortSignal): Promise<Picture>;
+  /** Moving shot from a picture (local Wan VACE). Absent = this engine can't animate. */
+  clip?(req: ClipRequest, signal?: AbortSignal): Promise<Clip>;
 }
+
+/** One AI-video clip on a 4 GB GPU: ~7 min (measured 435 s for 33 frames), queued behind other GPU work. */
+export const CLIP_TIMEOUT_MS = 30 * 60_000;
+/** A picture (~25 s) may queue behind one clip on the single GPU lock. */
+export const PICTURE_TIMEOUT_MS = CLIP_TIMEOUT_MS + 10 * 60_000;
 
 /** Final size of an HD (upscaled) picture: long side 1920, even numbers, same shape. Pure. */
 export const HD_LONG_SIDE = 1920;
@@ -103,8 +128,9 @@ export function createLocalPictures(o: LocalAiOptions): PictureEngine {
           ...(req.faceRef ? { faceRef: req.faceRef.toString('base64'), faceStrength: req.faceStrength ?? 0.65 } : {}),
         }),
         signal,
-        // SD (~12 s) + ESRGAN x4 (~31 s) on a 4 GB GPU, queued behind other pictures.
-        timeoutMs: req.upscale ? 600_000 : undefined,
+        // The gateway runs ONE GPU job at a time, so a picture can wait behind an AI-video clip (~7 min)
+        // of another scene. A dead gateway still fails fast (connection refused), so waiting is safe.
+        timeoutMs: o.timeoutMs ?? PICTURE_TIMEOUT_MS,
       });
       const num = (h: string) => {
         const v = res.headers.get(h);
@@ -120,6 +146,18 @@ export function createLocalPictures(o: LocalAiOptions): PictureEngine {
         width: num('x-width') ?? fallback.width,
         height: num('x-height') ?? fallback.height,
       };
+    },
+    async clip(req, signal) {
+      const res = await call('/video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: req.prompt, ref: req.ref.toString('base64'), width: req.width, height: req.height, seconds: req.seconds, seed: req.seed, frames: 33, steps: 6 }),
+        signal,
+        timeoutMs: CLIP_TIMEOUT_MS,
+      });
+      if (!(res.headers.get('content-type') ?? '').startsWith('video/mp4')) throw new Error('local AI returned no video');
+      const n = (h: string, d: number) => Number(res.headers.get(h)) || d;
+      return { data: Buffer.from(await res.arrayBuffer()), mimeType: 'video/mp4', width: n('x-width', req.width), height: n('x-height', req.height) };
     },
   };
 }

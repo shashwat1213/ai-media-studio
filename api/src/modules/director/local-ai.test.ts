@@ -5,7 +5,7 @@ import type { SharedEnv } from '../../config/env.js';
 import type { SpeechProvider } from '../audio/speech.js';
 import { ProviderError } from '../generation/providers/types.js';
 import { directorFromEnv, localAiStatus, picturesFromEnv, scribeFromEnv } from './index.js';
-import { createLocalPictures, createLocalSpeech, createSpeechRouter, hdSize, isAuraVoice, PIPER_VOICES } from './local-ai.js';
+import { createLocalPictures, createLocalSpeech, createSpeechRouter, hdSize, isAuraVoice, PIPER_VOICES, CLIP_TIMEOUT_MS, PICTURE_TIMEOUT_MS } from './local-ai.js';
 
 /**
  * A fake local-AI gateway on a real TCP port: the clients go through real fetch, real headers,
@@ -78,6 +78,22 @@ describe('local pictures (stable-diffusion.cpp gateway)', () => {
     expect(JSON.parse(seen[1]!.body.toString()).faceStrength).toBe(0.5);
     await pics.picture({ prompt: 'p', width: 64, height: 64 });
     expect(JSON.parse(seen[2]!.body.toString())).not.toHaveProperty('faceRef');
+  });
+
+  it('clip: POST /video with the picture as base64, long timeout; refuses a non-video reply', async () => {
+    reply = () => ({ headers: { 'content-type': 'video/mp4', 'x-width': '464', 'x-height': '832' }, body: 'MP4' });
+    const pics = createLocalPictures({ baseUrl: base, token: TOKEN });
+    const c = await pics.clip!({ prompt: 'she dances', ref: Buffer.from([1, 2, 3]), width: 1080, height: 1920, seconds: 4.5, seed: 9 });
+    expect(c).toMatchObject({ mimeType: 'video/mp4', width: 464, height: 832 });
+    expect(c.data.toString()).toBe('MP4');
+    expect(seen.at(-1)!.url).toBe('/video');
+    expect(JSON.parse(seen.at(-1)!.body.toString())).toMatchObject({ prompt: 'she dances', ref: 'AQID', seconds: 4.5, seed: 9, frames: 33, steps: 6 });
+    reply = () => ({ headers: { 'content-type': 'application/json' }, body: '{}' });
+    await expect(pics.clip!({ prompt: 'x', ref: Buffer.from([1]), width: 64, height: 64, seconds: 2 })).rejects.toThrow(/no video/);
+  });
+
+  it('a picture waits longer than one AI-video clip (single GPU queue)', () => {
+    expect(PICTURE_TIMEOUT_MS).toBeGreaterThan(CLIP_TIMEOUT_MS);
   });
 
   it('hdSize: long side 1920, even, same shape', () => {
@@ -244,16 +260,16 @@ describe('wiring from env', () => {
     let upscale = true;
     reply = (s) =>
       s.auth === `Bearer ${TOKEN}` && s.url === '/health'
-        ? { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ok: true, upscale, faceRef: upscale }) }
+        ? { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ok: true, upscale, faceRef: upscale, video: upscale }) }
         : { status: 401 };
-    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: `${base}/`, LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: true, image: true, upscale: true, faceRef: true });
+    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: `${base}/`, LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: true, image: true, upscale: true, faceRef: true, video: true });
     upscale = false;
-    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: base, LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: true, image: true, upscale: false, faceRef: false });
+    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: base, LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: true, image: true, upscale: false, faceRef: false, video: false });
     reply = () => ({ status: 200, body: 'not json' }); // llama-server style health: still "up", no upscale claim
-    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: base, LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: true, image: true, upscale: false, faceRef: false });
+    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: base, LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: true, image: true, upscale: false, faceRef: false, video: false });
     reply = (s) => ({ status: s.auth === `Bearer ${TOKEN}` ? 200 : 401 });
-    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: base, LOCAL_AI_TOKEN: 'wrong-token-0123456789' }))).toEqual({ llm: false, image: false, upscale: false, faceRef: false });
-    expect(await localAiStatus(env({ LOCAL_LLM_URL: 'http://127.0.0.1:1', LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: false, image: false, upscale: false, faceRef: false });
-    expect(await localAiStatus(env({ LOCAL_LLM_URL: base }))).toEqual({ llm: false, image: false, upscale: false, faceRef: false });
+    expect(await localAiStatus(env({ LOCAL_LLM_URL: base, LOCAL_AI_URL: base, LOCAL_AI_TOKEN: 'wrong-token-0123456789' }))).toEqual({ llm: false, image: false, upscale: false, faceRef: false, video: false });
+    expect(await localAiStatus(env({ LOCAL_LLM_URL: 'http://127.0.0.1:1', LOCAL_AI_TOKEN: TOKEN }))).toEqual({ llm: false, image: false, upscale: false, faceRef: false, video: false });
+    expect(await localAiStatus(env({ LOCAL_LLM_URL: base }))).toEqual({ llm: false, image: false, upscale: false, faceRef: false, video: false });
   });
 });

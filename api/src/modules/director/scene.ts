@@ -25,6 +25,8 @@ import type { PictureEngine } from './local-ai.js';
 export interface SceneShot extends Shot {
   /** Picture + narration produced for this shot. */
   imageUploadId?: string;
+  /** AI-video scenes: the picture, animated (an MP4 exactly shotLength long). Used instead of the picture. */
+  videoUploadId?: string;
   voiceUploadId?: string;
   /** Narration word timings (shot-local seconds) for karaoke captions. */
   words?: Word[];
@@ -126,7 +128,11 @@ export function buildDraft(script: SceneScript) {
   script.shots.forEach((s, i) => {
     if (!s.imageUploadId) return;
     const len = shotLength(s);
-    clips.push({ uploadId: s.imageUploadId, durationS: len, fit: 'cover', motion: CAMERA_TO_MOTION[s.camera] });
+    clips.push(
+      s.videoUploadId
+        ? { uploadId: s.videoUploadId, trimStartS: 0, trimEndS: len, fit: 'cover', volume: 0 }
+        : { uploadId: s.imageUploadId, durationS: len, fit: 'cover', motion: CAMERA_TO_MOTION[s.camera] },
+    );
     if (s.onScreen) {
       const st = starts[i]!;
       texts.push({ text: s.onScreen, startS: Math.round((st + 0.3) * 100) / 100, endS: Math.round((st + len - 0.4) * 100) / 100, x: 0.5, y: 0.14, size: 'l', color: '#ffffff', style: 'box', anim: 'slide' });
@@ -284,6 +290,28 @@ export async function produceScene(sceneId: string, deps: ProduceDeps, signal?: 
         s.voiceS = (info.durationMs ?? 0) / 1000;
       }
       await prisma.scene.update({ where: { id: sceneId }, data: { script: script as unknown as Prisma.InputJsonValue } });
+    }
+
+    // 2b) AI video: animate each shot's picture (GPU, ~7 min each). After all voices so each clip is
+    // exactly as long as its shot. Resumable like the rest: a retried scene keeps finished clips.
+    if (scene.motion === 'ai') {
+      if (!deps.pictures.clip) throw new ProviderError('no video engine', { retryable: false, userMessage: 'AI video is not available. Start the local AI with the Wan models.' });
+      for (let i = 0; i < n; i++) {
+        const s = script.shots[i]!;
+        if (s.videoUploadId || !s.imageUploadId) continue;
+        await progress(`Moving shot ${i + 1} of ${n} (AI video, ~7 min each)…`);
+        const pic = await prisma.upload.findFirstOrThrow({ where: { id: s.imageUploadId, userId: scene.userId } });
+        const len = shotLength(s);
+        const clip = await deps.pictures.clip({ prompt: s.visual, ref: await deps.storage.get(pic.storageKey), width: px.w, height: px.h, seconds: len, seed: s.seed }, signal);
+        const f = path.join(dir, `m${i}.mp4`);
+        await writeFile(f, clip.data);
+        const info = await probeMedia(f, 'video/mp4');
+        const up = await saveUpload(deps, scene.userId, clip.data, 'video/mp4', 'mp4', `shot-${i + 1}-moving.mp4`, {
+          source: 'AI_VIDEO', width: info.width ?? clip.width, height: info.height ?? clip.height, durationMs: info.durationMs, hasAudio: false, script: s.visual,
+        });
+        s.videoUploadId = up.id;
+        await prisma.scene.update({ where: { id: sceneId }, data: { script: script as unknown as Prisma.InputJsonValue } });
+      }
     }
 
     // 3) Sound bed from the library.

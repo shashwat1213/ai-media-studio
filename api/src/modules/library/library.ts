@@ -1,4 +1,5 @@
 import type { LibraryItem, LibraryKind, Prisma, PrismaClient } from '@prisma/client';
+import { checkContent } from '../director/content-policy.js';
 import { z } from 'zod';
 import { HttpError, notFound, tooManyRequests } from '../../lib/errors.js';
 
@@ -132,6 +133,8 @@ export function createLibraryService(deps: {
     },
 
     async create(userId: string, input: CreateItem) {
+      const policy = checkContent(`${input.name} ${input.description ?? ''}`);
+      if (!policy.ok) throw new HttpError(400, policy.reason!);
       if ((await prisma.libraryItem.count({ where: { userId } })) >= LIBRARY_LIMITS.items) {
         throw tooManyRequests(`Your library is full (${LIBRARY_LIMITS.items} items)`);
       }
@@ -155,6 +158,8 @@ export function createLibraryService(deps: {
     },
 
     async update(userId: string, id: string, patch: z.infer<typeof UpdateItemSchema>) {
+      const policy = checkContent(`${patch.name ?? ''} ${patch.description ?? ''}`);
+      if (!policy.ok) throw new HttpError(400, policy.reason!);
       const cur = await prisma.libraryItem.findFirst({ where: { id, userId } });
       if (!cur) throw notFound('Library item not found');
       // Re-validate the merged settings against the item's kind.

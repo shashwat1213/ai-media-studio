@@ -5,6 +5,9 @@ Local AI gateway for AI Media Studio (standard library only, no pip installs).
     POST /image       {"prompt", "negative"?, "width", "height", "seed"?, "steps"?, "upscale"?,
                        "faceRef"?: base64 PNG/JPEG (<= 4 MB), "faceStrength"?: 0.3..0.9}
                       -> image/png, or with "upscale": true an ESRGAN x4 image/jpeg (long side 1920)
+    POST /video       {"prompt", "ref": base64 PNG/JPEG (the shot's picture), "width", "height", "frames"?: 17..49,
+                       "steps"?: 4..10, "seconds"?: 1..12, "seed"?}                              -> video/mp4
+                       Wan 2.1 VACE 1.3B: the picture's character MOVES (~7 min per 2 s clip on 4 GB).
     POST /tts         {"text", "voice", "speed"?}                                   -> audio/wav
     POST /transcribe  raw audio bytes (any format ffmpeg reads), ?language=hi         -> JSON words
     GET  /health      -> {"ok": true, "voices": [...], "image": bool, "upscale": bool, "stt": bool}
@@ -44,6 +47,37 @@ ESRGAN_MODEL = os.path.join(ROOT, "models/upscale/RealESRGAN_x4plus.pth")
 IPA_MODEL = os.path.join(ROOT, "models/ipadapter/ip-adapter-plus-face_sd15.safetensors")
 IPA_CLIP = os.path.join(ROOT, "models/ipadapter/clip-vision-vit-h.safetensors")
 MAX_FACE_REF = 4 * 1024 * 1024
+# Moving shots: Wan 2.1 VACE 1.3B (reference image -> video) + CausVid LoRA (6-8 steps), umt5 text encoder on CPU.
+WAN_DIR = os.path.join(ROOT, "models/wan")
+WAN_VACE = os.path.join(WAN_DIR, "wan2.1-v3-vace-1.3b-q5_0.gguf")
+WAN_VAE = os.path.join(WAN_DIR, "wan_2.1_vae.safetensors")
+WAN_TE = os.path.join(WAN_DIR, "umt5-xxl-Q4_K_M.gguf")
+WAN_LORA = os.path.join(WAN_DIR, "causvid_1_3b_lora.safetensors")
+WAN_NEGATIVE = ("static, still frame, blurry, low quality, jpeg artifacts, deformed, extra fingers, extra limbs, bad hands, "
+                "bad face, text, subtitles, watermark, nsfw, nude, revealing clothes, bare shoulders")
+_gpu_device = None
+
+
+def gpu_device():
+    """The NVIDIA Vulkan device. sd-cli's auto-fit picks the iGPU on hybrid laptops (4x slower, measured)."""
+    global _gpu_device
+    if _gpu_device is None:
+        _gpu_device = ""
+        try:
+            out = subprocess.run([SD_BIN, "--list-devices"], capture_output=True, text=True, timeout=60,
+                                 env={**os.environ, "LD_LIBRARY_PATH": os.path.dirname(SD_BIN)}).stdout
+            for line in out.splitlines():
+                name, _, desc = line.partition("\t")
+                if name.startswith("Vulkan") and any(k in desc for k in ("NVIDIA", "GeForce", "RTX")):
+                    _gpu_device = name
+                    break
+        except Exception:
+            pass
+    return _gpu_device
+
+
+def video_ready():
+    return all(os.path.isfile(p) for p in (WAN_VACE, WAN_VAE, WAN_TE, WAN_LORA))
 # The face adapter pulls outfits towards "glamour" (measured); keep characters dressed as described.
 MODEST_NEGATIVE = "nsfw, nude, cleavage, off-shoulder, bare shoulders, thigh slit, bare legs, revealing clothes, lingerie, sexy"
 UPSCALE_LONG_SIDE = 1920  # final size: enough for a 1080x1920 reel, no wasted bytes
@@ -55,7 +89,7 @@ WHISPER_MODEL = os.path.join(ROOT, "models/whisper/large-v3-turbo-q5_0.bin")
 GPU = threading.Lock()  # one picture at a time
 CPU_STT = threading.Semaphore(1)  # whisper uses all cores; one at a time
 MAX_BODY = 30 * 1024 * 1024
-DEFAULT_NEGATIVE = "lowres, blurry, bad anatomy, extra fingers, deformed, text, watermark, logo, signature, jpeg artifacts"
+DEFAULT_NEGATIVE = "lowres, blurry, bad anatomy, extra fingers, deformed, text, watermark, logo, signature, jpeg artifacts, nsfw, nude, naked, topless, nipples, explicit"
 
 
 def find_whisper():
@@ -96,7 +130,9 @@ def make_image(body):
     h = max(256, min(768, h - h % 64))
     steps = max(2, min(12, int(body.get("steps", 6))))
     seed = int(body.get("seed", int(time.time() * 1000) % 2147483647))
-    negative = str(body.get("negative", DEFAULT_NEGATIVE))[:600]
+    negative = str(body.get("negative") or DEFAULT_NEGATIVE)[:600]
+    if "nsfw" not in negative:  # a caller's own negative never removes the safety terms
+        negative = f"{negative}, nsfw, nude, naked, topless, nipples, explicit"[:700]
     upscale = body.get("upscale") is True
     if upscale and not os.path.isfile(ESRGAN_MODEL):
         raise ValueError("upscaler not installed (run scripts/local-ai/install.sh)")
@@ -151,6 +187,62 @@ def make_image(body):
              "-vf", f"scale={fw}:{fh}:flags=lanczos", "-q:v", "2", jpg], timeout=60)
         with open(jpg, "rb") as f:
             return f.read(), {"seed": seed, "width": fw, "height": fh, "ms": ms, "mime": "image/jpeg"}
+
+
+def make_video(body):
+    if not video_ready():
+        raise ValueError("AI video needs the Wan models (run scripts/local-ai/install.sh)")
+    prompt = str(body.get("prompt", ""))[:1200].strip()
+    if not prompt:
+        raise ValueError("prompt required")
+    try:
+        ref = base64.b64decode(str(body.get("ref", "")), validate=True)
+    except Exception:
+        raise ValueError("ref must be base64")
+    if not ref or len(ref) > MAX_FACE_REF * 2 or not (ref[:8] == b"\x89PNG\r\n\x1a\n" or ref[:3] == b"\xff\xd8\xff"):
+        raise ValueError("ref must be a PNG or JPEG up to 8 MB")
+    # 480p-ish on a 4 GB card; multiples of 16. Frames are 4k+1 (Wan's latent stride).
+    w, h = int(body.get("width", 480)), int(body.get("height", 832))
+    k = 832 / max(w, h)
+    w, h = max(256, int(w * k) // 16 * 16), max(256, int(h * k) // 16 * 16)
+    frames = max(17, min(49, int(body.get("frames", 33))))
+    frames = (frames - 1) // 4 * 4 + 1
+    steps = max(4, min(10, int(body.get("steps", 6))))
+    seconds = max(1.0, min(12.0, float(body.get("seconds", 4))))
+    seed = int(body.get("seed", int(time.time() * 1000) % 2147483647))
+    with tempfile.TemporaryDirectory() as d:
+        src = os.path.join(d, "ref.img")
+        with open(src, "wb") as f:
+            f.write(ref)
+        out = os.path.join(d, "clip.mp4")
+        dev = gpu_device()
+        args = [SD_BIN, "-M", "vid_gen", "--diffusion-model", WAN_VACE, "--vae", WAN_VAE, "--t5xxl", WAN_TE,
+                "--lora-model-dir", WAN_DIR,
+                "-p", prompt + ", smooth natural motion <lora:causvid_1_3b_lora:1>", "-n", WAN_NEGATIVE,
+                "--cfg-scale", "1.0", "--sampling-method", "euler", "--steps", str(steps),
+                "-W", str(w), "-H", str(h), "-i", src, "--video-frames", str(frames), "--fps", "16",
+                "--flow-shift", "3.0", "--vae-tiling", "-s", str(seed), "-o", out]
+        if dev:
+            args += ["--backend", f"te=cpu,diffusion={dev},vae={dev}", "--params-backend", "te=cpu"]
+        with GPU:
+            t = time.time()
+            run(args, timeout=1500)
+            ms = int((time.time() - t) * 1000)
+        raw = out + ".avi" if os.path.isfile(out + ".avi") else out
+        # 16 fps -> 24 fps (motion interpolation), then forward+backward ("boomerang") until it covers
+        # the shot, so a 2 s clip fills a 4-6 s shot without freezing on the last frame.
+        fwd = os.path.join(d, "fwd.mp4")
+        run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", raw,
+             "-vf", "minterpolate=fps=24:mi_mode=mci,format=yuv420p", "-an", "-c:v", "libx264", "-crf", "18", "-preset", "veryfast", fwd], timeout=300)
+        clip_s = frames / 16
+        loops = max(0, int(seconds / (2 * clip_s) + 0.999) - 1)
+        final = os.path.join(d, "final.mp4")
+        run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", fwd,
+             "-filter_complex", f"[0:v]split[a][b];[b]reverse[r];[a][r]concat=n=2:v=1:a=0,loop=loop={loops}:size=32767:start=0,setpts=N/24/TB[v]",
+             "-map", "[v]", "-t", f"{seconds:.2f}", "-c:v", "libx264", "-crf", "18", "-preset", "veryfast",
+             "-pix_fmt", "yuv420p", "-movflags", "+faststart", final], timeout=300)
+        with open(final, "rb") as f:
+            return f.read(), {"seed": seed, "width": w, "height": h, "ms": ms}
 
 
 def make_tts(body):
@@ -238,6 +330,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True, "voices": voices(), "image": os.path.isfile(SD_MODEL) and os.path.isfile(SD_BIN),
                              "upscale": os.path.isfile(ESRGAN_MODEL),
                              "faceRef": os.path.isfile(IPA_MODEL) and os.path.isfile(IPA_CLIP),
+                             "video": video_ready(),
                              "stt": bool(find_whisper()) and os.path.isfile(WHISPER_MODEL)})
         else:
             self._send(404, {"error": "not found"})
@@ -251,6 +344,10 @@ class Handler(BaseHTTPRequestHandler):
                 png, meta = make_image(json.loads(self._body()))
                 self._send(200, body=png, ctype=meta["mime"], headers={"X-Seed": str(meta["seed"]), "X-Render-Ms": str(meta["ms"]),
                                                                     "X-Width": str(meta["width"]), "X-Height": str(meta["height"])})
+            elif url.path == "/video":
+                mp4, meta = make_video(json.loads(self._body()))
+                self._send(200, body=mp4, ctype="video/mp4", headers={"X-Seed": str(meta["seed"]), "X-Render-Ms": str(meta["ms"]),
+                                                                       "X-Width": str(meta["width"]), "X-Height": str(meta["height"])})
             elif url.path == "/tts":
                 self._send(200, body=make_tts(json.loads(self._body())), ctype="audio/wav")
             elif url.path == "/transcribe":

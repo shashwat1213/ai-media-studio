@@ -26,6 +26,8 @@ export interface SceneShot {
   onScreen: string;
   uses: string[];
   imageUploadId?: string;
+  /** AI video: the shot's picture, animated. */
+  videoUploadId?: string;
   voiceUploadId?: string;
   voiceS?: number;
   imagePrompt?: string;
@@ -40,6 +42,8 @@ export interface Scene {
   format: '9:16' | '16:9' | '1:1';
   targetS: number;
   hd: boolean;
+  /** 'ai' = every shot is a moving AI-video clip. */
+  motion: 'still' | 'ai';
   voice: string;
   status: 'PLANNING' | 'PRODUCING' | 'READY' | 'FAILED';
   title: string | null;
@@ -55,8 +59,10 @@ export interface ScenesConfig {
   cost: number;
   limits: { shots: number; maxTotalS: number; prompt: number };
   voices: Voice[];
-  localAi: { llm: boolean; image: boolean; upscale: boolean; faceRef: boolean };
+  localAi: { llm: boolean; image: boolean; upscale: boolean; faceRef: boolean; video: boolean };
   hdCost: number;
+  /** Extra credits for AI video (moving shots). */
+  aiMotionExtra: number;
 }
 
 export const libraryKey = ['library'] as const;
@@ -104,7 +110,7 @@ export function useScenes() {
 export function useCreateScene() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { prompt: string; language: SceneLanguage | 'auto'; format: Scene['format']; targetS: number; voice?: string; hd: boolean }) =>
+    mutationFn: (body: { prompt: string; language: SceneLanguage | 'auto'; format: Scene['format']; targetS: number; voice?: string; hd: boolean; motion: 'still' | 'ai' }) =>
       api<{ scene: Scene }>('/scenes', { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: scenesKey });

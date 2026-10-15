@@ -118,6 +118,7 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
   const [format, setFormat] = useState<Scene['format']>('9:16');
   const [targetS, setTargetS] = useState(20);
   const [hdWanted, setHd] = useState(false);
+  const [motionWanted, setMotion] = useState<'still' | 'ai'>('still');
   const [voice, setVoice] = useState('');
   const [caret, setCaret] = useState(0);
 
@@ -155,9 +156,14 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
 
   async function submit() {
     try {
-      await create.mutateAsync({ prompt, language: choice, format, targetS, voice: chosenVoice || undefined, hd });
+      await create.mutateAsync({ prompt, language: choice, format, targetS, voice: chosenVoice || undefined, hd, motion });
       toast.success('Scene started', {
-        description: hd ? 'Writing the script, then painting + upscaling each shot. About 45 s per shot on this computer.' : 'Writing the script, then painting each shot. Takes 1-3 minutes on this computer.',
+        description:
+          motion === 'ai'
+            ? 'Writing the script, painting each shot, then animating every shot with AI video (~7 min per shot). You can leave this page.'
+            : hd
+              ? 'Writing the script, then painting + upscaling each shot. About 45 s per shot on this computer.'
+              : 'Writing the script, then painting each shot. Takes 1-3 minutes on this computer.',
       });
       setPrompt('');
     } catch (err) {
@@ -168,7 +174,11 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
   const hdReady = cfg.data?.localAi.upscale ?? false;
   // Only send HD when the machine can make it (the API refuses otherwise, before charging).
   const hd = hdWanted && hdReady;
-  const cost = hd ? (cfg.data?.hdCost ?? 8) : (cfg.data?.cost ?? 5);
+  const videoReady = cfg.data?.localAi.video ?? false;
+  const motion = motionWanted === 'ai' && videoReady ? 'ai' : 'still';
+  const cost = (hd ? (cfg.data?.hdCost ?? 8) : (cfg.data?.cost ?? 5)) + (motion === 'ai' ? (cfg.data?.aiMotionExtra ?? 10) : 0);
+  // Rough GPU time: ~4 shots per 20 s; AI video ~7 min per shot.
+  const etaMin = motion === 'ai' ? Math.round((Math.max(2, Math.round(targetS / 5)) * 7.5)) : 0;
   const offline = cfg.data && !(cfg.data.localAi.llm && cfg.data.localAi.image);
   return (
     <section aria-label="New scene" className="space-y-3 rounded-2xl bg-white/[0.02] p-4 ring-1 ring-white/[0.06]">
@@ -256,6 +266,12 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
           options={hdReady ? [['sd', 'Fast'], ['hd', 'HD ×4']] : [['sd', 'Fast']]}
           onChange={(v) => setHd(v === 'hd')}
         />
+        <Seg
+          label={videoReady ? 'Motion' : 'Motion · AI video needs the Wan models'}
+          value={motion}
+          options={videoReady ? [['still', 'Camera moves'], ['ai', 'AI video']] : [['still', 'Camera moves']]}
+          onChange={(v) => setMotion(v as 'still' | 'ai')}
+        />
         <label className="min-w-0 flex-1 space-y-1 sm:max-w-64">
           <span className="block text-[11px] text-muted-foreground">Narrator</span>
           <select aria-label="Narrator voice" value={chosenVoice} onChange={(e) => setVoice(e.target.value)} className="h-9 w-full rounded-lg border border-input bg-background px-2 text-sm">
@@ -299,6 +315,7 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
             ? 'Hindi voice-over, captions in Devanagari.'
             : 'English voice-over and captions.'}
         {hd && ' HD: every shot is upscaled ×4 on the GPU (sharp at 1080×1920), ~45 s per shot.'}
+        {motion === 'ai' && ` AI video: every shot really moves (people walk, dance, hair and clothes flow). Slow on this computer: about ${etaMin} min for ${targetS}s. It runs in the background.`}
       </p>
       {offline && (
         <p className="flex items-center gap-1.5 text-xs text-amber-300">
@@ -376,16 +393,19 @@ function SceneCard({ scene }: { scene: Scene }) {
         <ol className="flex snap-x gap-3 overflow-x-auto pb-1" aria-label="Storyboard">
           {shots.map((s, i) => {
             const url = s.imageUploadId ? scene.images?.[s.imageUploadId] : undefined;
+            const videoUrl = s.videoUploadId ? scene.images?.[s.videoUploadId] : undefined;
             return (
               <li key={i} className="w-44 shrink-0 snap-start space-y-1.5">
                 <div className="relative overflow-hidden rounded-xl bg-black ring-1 ring-white/10" style={{ aspectRatio: ratio }}>
-                  {url ? (
+                  {videoUrl ? (
+                    <video src={videoUrl} poster={url} aria-label={s.visual} className="size-full object-cover" muted loop autoPlay playsInline />
+                  ) : url ? (
                     <img src={url} alt={s.visual} className="size-full object-cover" loading="lazy" />
                   ) : (
                     <div className="grid size-full place-items-center text-muted-foreground">{busy ? <Loader2 className="size-5 animate-spin" /> : <Camera className="size-5" />}</div>
                   )}
                   <span className="absolute top-1 left-1 rounded bg-black/70 px-1.5 text-[10px] text-white tabular-nums">
-                    {i + 1} · {s.durationS.toFixed(1)}s
+                    {i + 1} · {s.durationS.toFixed(1)}s{videoUrl ? ' · moving' : ''}
                   </span>
                   {s.onScreen && <span className="absolute inset-x-1 top-6 truncate rounded bg-black/60 px-1 text-center text-[10px] text-white">{s.onScreen}</span>}
                 </div>
