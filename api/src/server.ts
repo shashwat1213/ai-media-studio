@@ -6,6 +6,8 @@ import { createStorage, storageConfigFromEnv } from './lib/storage.js';
 import { createApp } from './app.js';
 import { createJobQueue } from './modules/generation/queue.js';
 import { createLogger } from './observability/logger.js';
+import { speechFromEnv } from './modules/audio/index.js';
+import { localAiStatus } from './modules/director/index.js';
 
 const env = loadEnv();
 const logger = createLogger(env.NODE_ENV, env.LOG_LEVEL);
@@ -15,10 +17,11 @@ const queue = createJobQueue(redis, { maxAttempts: env.JOB_MAX_ATTEMPTS, backoff
 const storage = createStorage(storageConfigFromEnv(env));
 const config = toAppConfig(env);
 
-const app = createApp({ prisma, config, logger, queue, storage, redisPing: () => pingRedis(redis) });
+const speech = speechFromEnv(env);
+const app = createApp({ prisma, config, logger, queue, storage, redisPing: () => pingRedis(redis), speech, ffmpegPath: env.FFMPEG_PATH, localAi: () => localAiStatus(env) });
 
 const server = app.listen(env.PORT, () => {
-  logger.info({ port: env.PORT, env: env.NODE_ENV, aiProvider: config.providerMode }, 'API listening');
+  logger.info({ port: env.PORT, env: env.NODE_ENV, aiProvider: config.providerMode, speech: speech.name }, 'API listening');
 });
 
 /**

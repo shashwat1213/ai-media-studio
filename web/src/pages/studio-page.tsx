@@ -11,6 +11,8 @@ import { JobCard } from '@/features/generation/job-card';
 import { MotionSettings, MotionStage, useMotionState } from '@/features/generation/motion-tool';
 import { useModels, useMotionPresets, useRecentJobs } from '@/features/generation/use-generation';
 import { StudioLayout, ToolRail, type Tool } from '@/features/studio/studio-layout';
+import { EditorCanvas, EditorSettings, useEditorTool } from '@/features/editor/editor-tool';
+import { useEditorConfig, useUploads } from '@/features/editor/use-editor';
 
 const toAsset = (j: Job): Asset | null => (j.asset ? { ...j.asset, prompt: j.prompt, model: j.model, aspectRatio: j.aspectRatio } : null);
 
@@ -20,7 +22,8 @@ const toAsset = (j: Job): Asset | null => (j.asset ? { ...j.asset, prompt: j.pro
  */
 export function StudioPage() {
   const [params, setParams] = useSearchParams();
-  const tool: Tool = params.get('tool') === 'motion' ? 'motion' : 'image';
+  const raw = params.get('tool');
+  const tool: Tool = raw === 'motion' || raw === 'editor' ? raw : 'image';
   const setTool = (t: Tool, extra: Record<string, string> = {}) => setParams({ tool: t, ...extra }, { replace: false });
 
   const { data: user } = useMe();
@@ -41,13 +44,24 @@ export function StudioPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const jobs = useRecentJobs(30, tool === 'motion' ? 'MOTION' : 'IMAGE');
+  // Editor data only loads once the Editor tab is opened.
+  const editorConfig = useEditorConfig();
+  const uploads = useUploads();
+  const editorTool = useEditorTool(uploads.data?.items);
+
+  const jobs = useRecentJobs(30, tool === 'motion' ? 'MOTION' : tool === 'editor' ? 'EDIT' : 'IMAGE');
   const [open, setOpen] = useState<Asset | null>(null);
   const items = jobs.data?.items ?? [];
   const balance = user?.credits ?? 0;
 
   const settings =
-    tool === 'image' ? (
+    tool === 'editor' ? (
+      editorConfig.data ? (
+        <EditorSettings tool={editorTool} config={editorConfig.data} uploads={uploads.data?.items ?? []} uploadsLoading={uploads.isLoading} balance={balance} />
+      ) : (
+        <PanelSkeleton />
+      )
+    ) : tool === 'image' ? (
       models.data ? (
         <ImageSettings catalog={models.data} settings={imageSettings} />
       ) : (
@@ -69,6 +83,10 @@ export function StudioPage() {
                 <>
                   What will you <span className="text-gradient">create</span> today?
                 </>
+              ) : tool === 'editor' ? (
+                <>
+                  Turn screenshots into a <span className="text-gradient">walkthrough</span>.
+                </>
               ) : (
                 <>
                   Bring an image to <span className="text-gradient">life</span>.
@@ -76,7 +94,11 @@ export function StudioPage() {
               )}
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {tool === 'image' ? 'Describe it. It renders in the background, so keep going.' : 'Pick an image and a camera move. Preview it live, then render an MP4.'}
+              {tool === 'image'
+                ? 'Describe it. It renders in the background, so keep going.'
+                : tool === 'editor'
+                  ? 'Upload screenshots or record your screen, add captions and highlights, then render an MP4.'
+                  : 'Pick an image and a camera move. Preview it live, then render an MP4.'}
             </p>
           </header>
 
@@ -93,14 +115,20 @@ export function StudioPage() {
               )}
               {models.data?.mode === 'stub' && <DemoBanner />}
             </>
+          ) : tool === 'editor' ? (
+            editorConfig.data ? (
+              <EditorCanvas tool={editorTool} config={editorConfig.data} uploads={uploads.data?.items ?? []} />
+            ) : (
+              <Skeleton className="aspect-video w-full rounded-2xl" />
+            )
           ) : motionCatalog.data ? (
             <MotionStage m={m} presets={motionCatalog.data.presets} />
           ) : (
             <Skeleton className="aspect-video w-full rounded-2xl" />
           )}
 
-          <section aria-label={tool === 'image' ? 'Your images' : 'Your videos'} className="mt-8">
-            <h2 className="mb-3 text-sm font-medium text-muted-foreground">{tool === 'image' ? 'Recent images' : 'Recent videos'}</h2>
+          <section aria-label={tool === 'image' ? 'Your images' : tool === 'editor' ? 'Your edits' : 'Your videos'} className="mt-8">
+            <h2 className="mb-3 text-sm font-medium text-muted-foreground">{tool === 'image' ? 'Recent images' : tool === 'editor' ? 'Rendered edits' : 'Recent videos'}</h2>
             {jobs.isLoading ? (
               <div className="columns-2 gap-3 md:columns-3 xl:columns-4">
                 {Array.from({ length: 6 }, (_, i) => (
@@ -115,7 +143,9 @@ export function StudioPage() {
               tool === 'image' ? (
                 <EmptyImages onPick={remix} />
               ) : (
-                <p className="rounded-2xl border border-dashed border-white/10 py-10 text-center text-sm text-muted-foreground">Your videos will appear here.</p>
+                <p className="rounded-2xl border border-dashed border-white/10 py-10 text-center text-sm text-muted-foreground">
+                  {tool === 'editor' ? 'Rendered edits will appear here.' : 'Your videos will appear here.'}
+                </p>
               )
             ) : (
               <motion.div layout className="columns-2 gap-3 md:columns-3 xl:columns-4 [&>*]:mb-3 [&>*]:break-inside-avoid">

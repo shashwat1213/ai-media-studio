@@ -17,3 +17,6 @@ api/bench/results.json
 *.tfstate.*
 *.tfplan
 terraform.tfvars
+api/.scratch/
+__pycache__/
+*.pyc

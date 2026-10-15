@@ -72,3 +72,5 @@ cd web && npm run typecheck && npm run lint && npm run build && npm run size
 - [ ] Phase 3 — payments (optional)
 - [x] Phase 4 — Dockerize fully (api image 1.11 GB → 346 MB, non-root, compose + CI smoke test)
 - [ ] Phase 5 — CI/CD + AWS
+- [x] Editor — screenshots / screen recordings + captions + highlights → MP4 (ffmpeg, free). See `specs/08_editor_spec.md`
+- [x] Scene Director — prompt + @library → local AI writes shots, paints them, voices them (Hindi/English) → editor. Runs on this computer: `scripts/local-ai/install.sh` then `scripts/local-ai/start.sh`. See `specs/09_scene_director_spec.md`

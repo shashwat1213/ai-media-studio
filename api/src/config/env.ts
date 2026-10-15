@@ -43,6 +43,16 @@ const SharedSchema = z.object({
   CLOUDFLARE_ACCOUNT_ID: z.string().optional(),
   CLOUDFLARE_API_TOKEN: z.string().optional(),
   STUB_DELAY_MS: z.coerce.number().int().min(0).default(2500),
+  // Speech (voice-over + transcription). 'auto' = Cloudflare when its credentials are set, else the
+  // free offline stub. Same free daily Workers AI allocation as the images.
+  SPEECH_PROVIDER: z.enum(['auto', 'cloudflare', 'stub']).default('auto'),
+  // Local AI (scripts/local-ai): LLM director on :8081, pictures/Piper/whisper gateway on :8082.
+  // Unset = Scene Director uses the offline stubs (tests/CI); the editor works either way.
+  LOCAL_AI_URL: z.string().url().optional(),
+  LOCAL_LLM_URL: z.string().url().optional(),
+  /** Optional second LLM for Hinglish -> Devanagari (Gemma-3-4B on :8083). Defaults to LOCAL_LLM_URL. */
+  LOCAL_SCRIBE_URL: z.string().url().optional(),
+  LOCAL_AI_TOKEN: z.string().min(16).optional(),
   PROVIDER_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
 
   // --- Jobs ---
@@ -52,6 +62,8 @@ const SharedSchema = z.object({
 });
 
 const ApiSchema = SharedSchema.extend({
+  /** ffmpeg/ffprobe for voice-over joining (the API image ships them). */
+  FFMPEG_PATH: z.string().min(1).default('ffmpeg'),
   PORT: z.coerce.number().int().positive().default(4000),
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
   // >= 32 chars: HS256 needs a long random secret to resist brute force.

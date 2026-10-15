@@ -81,12 +81,21 @@ RUN rm -rf node_modules/prisma node_modules/@prisma/engines node_modules/@prisma
 # ---------- runtime (default) ----------
 FROM base AS runtime
 ENV PORT=4000
-# ffmpeg renders MOTION jobs (image -> MP4) in the worker. ~+60 MB, from Alpine's signed repo.
+# ffmpeg renders MOTION + EDIT jobs in the worker; the API uses ffprobe to verify uploads. ~+60 MB, from Alpine's signed repo.
 # Same image runs the API (which never calls it): one image for both keeps deploys simple.
 RUN apk add --no-cache ffmpeg
 # --chown: the non-root user owns its files.
 COPY --from=runtime-deps --chown=node:node /app/node_modules ./node_modules
 COPY --from=build        --chown=node:node /app/dist ./dist
+# Caption fonts for the Editor (SIL OFL; licence files shipped next to them). Read-only data.
+COPY --chown=node:node assets ./assets
+# libass picks a FALLBACK font per character through fontconfig (Latin from Geist, Hindi from Noto
+# Devanagari). Alpine has no system fonts, so without this fontconfig knows no fonts at all and
+# Hindi captions render as empty boxes. Point it at our bundled fonts and build its cache.
+RUN mkdir -p /etc/fonts/conf.d \
+ && printf '<?xml version="1.0"?>\n<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n<fontconfig><dir>/app/assets/fonts</dir><cachedir>/tmp/fontconfig</cachedir></fontconfig>\n' > /etc/fonts/conf.d/50-app-fonts.conf \
+ && fc-cache -f /app/assets/fonts \
+ && fc-list | grep -q 'Noto Sans Devanagari'
 COPY --chown=node:node package.json ./
 
 # The official node image ships a non-root `node` user (uid 1000). Never run as root:

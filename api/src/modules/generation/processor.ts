@@ -5,6 +5,8 @@ import type { Metrics } from '../../observability/metrics.js';
 import { failAndRefund } from './job-lifecycle.js';
 import { findPreset } from './motion.js';
 import type { MotionRenderer } from './motion-renderer.js';
+import type { EditRenderer } from '../editor/edit-renderer.js';
+import { parseStoredSpec, specUploadIds } from '../editor/edit-spec.js';
 import { ProviderError, type ImageProvider } from './providers/types.js';
 
 export interface ProcessorDeps {
@@ -12,6 +14,8 @@ export interface ProcessorDeps {
   provider: ImageProvider;
   /** Needed for MOTION jobs. A worker without it fails motion jobs (with a refund) instead of crashing. */
   motion?: MotionRenderer;
+  /** Needed for EDIT jobs. Same rule: missing = fail + refund, never crash. */
+  editor?: EditRenderer;
   storage: Storage;
   logger: Logger;
   metrics?: Metrics;
@@ -33,6 +37,8 @@ export type AttemptResult = 'done' | 'skipped' | 'failed' | 'retry';
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 60 * 1024 * 1024;
+/** Edits can be 2 minutes of 1080p screen content. */
+const MAX_EDIT_BYTES = 250 * 1024 * 1024;
 
 /** The output of step 2, whatever the job kind. */
 interface Output {
@@ -58,9 +64,10 @@ const extOf = (mime: string) =>
  *  - Asset create + DONE happen in one transaction, guarded by status = PROCESSING.
  *  - A late/duplicate delivery of a finished job is skipped at the first step.
  *
- * Two kinds share this lifecycle; only step 2 ("make the output") differs:
+ * All kinds share this lifecycle; only step 2 ("make the output") differs:
  *  - IMAGE:  prompt -> AI provider -> image
  *  - MOTION: source image (from storage) -> renderer (ffmpeg) -> MP4
+ *  - EDIT:   the user's uploads + captions (EditSpec) -> editor renderer (ffmpeg) -> MP4
  */
 export async function processGenerationJob(jobId: string, info: AttemptInfo, deps: ProcessorDeps): Promise<AttemptResult> {
   const { prisma, storage, logger, metrics } = deps;
@@ -81,15 +88,21 @@ export async function processGenerationJob(jobId: string, info: AttemptInfo, dep
 
   // 2. Make the output (the slow, flaky part).
   let output: Output;
-  const source = job.kind === 'MOTION' ? (deps.motion?.name ?? 'none') : deps.provider.name;
+  const source =
+    job.kind === 'MOTION' ? (deps.motion?.name ?? 'none') : job.kind === 'EDIT' ? (deps.editor?.name ?? 'none') : deps.provider.name;
   const providerTimer = metrics?.providerDuration.startTimer({ provider: source });
   try {
-    output = job.kind === 'MOTION' ? await renderMotion(job, info, deps) : await generateImage(job, info, deps);
-    const max = job.kind === 'MOTION' ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES;
+    output =
+      job.kind === 'MOTION'
+        ? await renderMotion(job, info, deps)
+        : job.kind === 'EDIT'
+          ? await renderEdit(job, info, deps)
+          : await generateImage(job, info, deps);
+    const max = job.kind === 'MOTION' ? MAX_VIDEO_BYTES : job.kind === 'EDIT' ? MAX_EDIT_BYTES : MAX_IMAGE_BYTES;
     if (output.data.length === 0 || output.data.length > max) {
       throw new ProviderError(`bad output size: ${output.data.length} bytes`, {
         retryable: true,
-        userMessage: job.kind === 'MOTION' ? 'Rendering produced an invalid video.' : 'The AI provider returned an invalid image.',
+        userMessage: job.kind === 'IMAGE' ? 'The AI provider returned an invalid image.' : 'Rendering produced an invalid video.',
       });
     }
     providerTimer?.({ outcome: 'ok' });
@@ -186,6 +199,37 @@ async function renderMotion(job: Job, info: AttemptInfo, deps: ProcessorDeps): P
   }
   const image = await deps.storage.get(src.storageKey); // throws -> transient -> retry
   return deps.motion.render({ image, width: src.width, height: src.height, preset, durationS: job.durationS, signal: info.signal });
+}
+
+async function renderEdit(job: Job, info: AttemptInfo, deps: ProcessorDeps): Promise<Output> {
+  if (!deps.editor) {
+    throw new ProviderError('no edit renderer configured', { retryable: false, userMessage: 'Video rendering is unavailable right now.' });
+  }
+  const spec = parseStoredSpec(job.editSpec);
+  if (!spec) throw new ProviderError('bad edit spec', { retryable: false, userMessage: 'This edit could not be read. Please try again.' });
+
+  // Every source must still exist, be READY and belong to the job's owner (the user may have
+  // deleted a file while the job was queued; ids in the JSON are never trusted on their own).
+  const ids = specUploadIds(spec);
+  const uploads = ids.length ? await deps.prisma.upload.findMany({ where: { id: { in: ids }, userId: job.userId, status: 'READY' } }) : [];
+  const byId = new Map(uploads.map((u) => [u.id, u]));
+  if (byId.size !== ids.length) {
+    throw new ProviderError('edit source missing', {
+      retryable: false,
+      userMessage: 'One of the files in this edit was deleted before the video could be made.',
+    });
+  }
+  return deps.editor.render({
+    spec,
+    // Storage errors are transient -> the generic catch marks them retryable.
+    fetchClip: (i, filePath) => {
+      const c = spec.clips[i]!;
+      if (c.kind === 'card') return Promise.resolve();
+      return deps.storage.download(byId.get(c.uploadId)!.storageKey, filePath);
+    },
+    fetchAudio: (i, filePath) => deps.storage.download(byId.get(spec.audio[i]!.uploadId)!.storageKey, filePath),
+    signal: info.signal,
+  });
 }
 
 /**

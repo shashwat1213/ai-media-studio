@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Coins, Images, LayoutDashboard, LogOut, Plus, Wand2 } from 'lucide-react';
+import { Clapperboard, Coins, Images, LayoutDashboard, LogOut, Plus, Wand2 } from 'lucide-react';
 import { cn } from 'cn';
 import { Logo } from '@/components/brand/logo';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -18,6 +18,7 @@ import { useLogout, useMe } from '@/features/auth/use-auth';
 const nav = [
   { to: '/', label: 'Home', icon: LayoutDashboard },
   { to: '/studio', label: 'Studio', icon: Wand2 },
+  { to: '/director', label: 'Director', icon: Clapperboard },
   { to: '/gallery', label: 'Gallery', icon: Images },
 ];
 

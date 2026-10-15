@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { Prisma, type Asset, type GenerationJob, type JobKind, type JobStatus, type PrismaClient } from '@prisma/client';
 import { conflict, HttpError, InsufficientCreditsError, notFound, serviceUnavailable, tooManyRequests } from '../../lib/errors.js';
 import type { Storage } from '../../lib/storage.js';
@@ -8,6 +9,8 @@ import { ACTIVE_STATUSES, failAndRefund } from './job-lifecycle.js';
 import { findModel } from './models.js';
 import { MOTION_MODEL_ID, findPreset, motionCost } from './motion.js';
 import type { JobQueue } from './queue.js';
+import { kindOf } from '../editor/uploads.service.js';
+import { EDIT_MODEL_ID, EditSpecError, editCost, normaliseEdit, type EditRequest, type EditSpec, type UploadInfo } from '../editor/edit-spec.js';
 
 export interface CreateJobInput {
   prompt: string;
@@ -63,6 +66,8 @@ export interface PublicJob {
   asset: PublicAsset | null;
   /** MOTION only. */
   motion: { preset: string; durationS: number; sourceAssetId: string | null } | null;
+  /** EDIT only: the normalised timeline (so the UI can reopen / duplicate an edit). */
+  edit: EditSpec | null;
 }
 
 type JobWithAsset = GenerationJob & { asset: Asset | null };
@@ -110,6 +115,7 @@ export function createGenerationService({ prisma, queue, storage, metrics, maxAc
         j.kind === 'MOTION' && j.motionPreset && j.durationS
           ? { preset: j.motionPreset, durationS: j.durationS, sourceAssetId: j.sourceAssetId }
           : null,
+      edit: j.kind === 'EDIT' ? (j.editSpec as unknown as EditSpec) : null,
     };
   }
 
@@ -191,6 +197,36 @@ export function createGenerationService({ prisma, queue, storage, metrics, maxAc
     return job;
   }
 
+  /** Normalise without charging: "would this render?" (template build, AI director, render). */
+  async function previewEdit(userId: string, input: EditRequest): Promise<EditSpec> {
+    const ids = [
+      ...new Set([
+        ...input.clips.flatMap((c) => ('uploadId' in c ? [c.uploadId] : [])),
+        ...input.audio.map((a) => a.uploadId),
+        ...(input.autoCaptions ? [input.autoCaptions.uploadId] : []),
+      ]),
+    ];
+    const rows = ids.length ? await prisma.upload.findMany({ where: { id: { in: ids }, userId, status: 'READY' } }) : [];
+    const uploads = new Map<string, UploadInfo>(
+      rows.map((u) => [
+        u.id,
+        {
+          id: u.id,
+          kind: kindOf(u.mimeType),
+          durationMs: u.durationMs,
+          hasAudio: u.hasAudio,
+          words: u.transcriptStatus === 'DONE' ? ((u.transcript as { words?: UploadInfo['words'] } | null)?.words ?? null) : null,
+        },
+      ]),
+    );
+    try {
+      return normaliseEdit(input, uploads);
+    } catch (err) {
+      if (err instanceof EditSpecError) throw new HttpError(400, err.message);
+      throw err;
+    }
+  }
+
   return {
     /** Text -> image. See reserveAndEnqueue for how credits + queue stay consistent. */
     async create(userId: string, input: CreateJobInput, idempotencyKey?: string) {
@@ -243,6 +279,62 @@ export function createGenerationService({ prisma, queue, storage, metrics, maxAc
           include: { asset: true },
         }),
         (j) => j.sourceAssetId === src.id && j.motionPreset === preset.id && j.durationS === input.durationS,
+      );
+      if ('replayed' in job) return job;
+      return { job: await toPublicJob(job), replayed: false };
+    },
+
+    /** Facts about the user's READY uploads, in the order asked (unknown / foreign ids -> 400). */
+    async uploadInfo(userId: string, ids: string[]) {
+      const rows = await prisma.upload.findMany({ where: { id: { in: ids }, userId, status: 'READY' } });
+      const byId = new Map(rows.map((u) => [u.id, u]));
+      return ids.map((id, i) => {
+        const u = byId.get(id);
+        if (!u) throw new HttpError(400, `File ${i + 1} not found`);
+        const kind = kindOf(u.mimeType);
+        if (kind === 'audio') throw new HttpError(400, `File ${i + 1} is audio: add it on the audio track instead`);
+        return { uploadId: u.id, kind, durationMs: u.durationMs };
+      });
+    },
+
+    /** Normalise without charging: "would this render?" (used by template build and the AI director). */
+    previewEdit,
+
+    /**
+     * Editor: the user's own uploads + captions -> one MP4. Same money/queue path as create():
+     * credits reserved in the same transaction as the job, refunded once if anything fails.
+     * The request is normalised against the REAL uploads (owned by this user, READY, real
+     * durations), and that normalised spec is what gets stored and rendered.
+     */
+    async createEdit(userId: string, input: EditRequest, idempotencyKey?: string) {
+      const spec = await previewEdit(userId, input);
+      const credits = editCost(spec.totalS);
+      const title = input.title?.trim() || `Edit · ${spec.clips.length} clip${spec.clips.length > 1 ? 's' : ''}`;
+      const fingerprint = { prompt: title, model: EDIT_MODEL_ID, aspectRatio: spec.format };
+      // Plain-JSON copy: what Postgres will hand back (JSONB doesn't keep key order, so compare deeply).
+      const specJson = JSON.parse(JSON.stringify(spec)) as unknown;
+      const job = await reserveAndEnqueue(
+        userId,
+        credits,
+        idempotencyKey,
+        fingerprint,
+        (tx, id) =>
+          tx.generationJob.create({
+            data: {
+              id,
+              userId,
+              kind: 'EDIT',
+              prompt: title,
+              model: EDIT_MODEL_ID,
+              aspectRatio: spec.format,
+              creditsCost: credits,
+              idempotencyKey,
+              durationS: Math.ceil(spec.totalS),
+              editSpec: spec as unknown as Prisma.InputJsonValue,
+            },
+            include: { asset: true },
+          }),
+        (j) => isDeepStrictEqual(j.editSpec, specJson),
       );
       if ('replayed' in job) return job;
       return { job: await toPublicJob(job), replayed: false };

@@ -23,8 +23,14 @@ export function JobCard({ job, models, onOpen, onRemix, onAnimate }: Props) {
   const took = duration(job.startedAt ?? job.createdAt, job.finishedAt);
   const done = job.status === 'DONE' && job.asset;
   const isMotion = job.kind === 'MOTION';
+  const isEdit = job.kind === 'EDIT';
+  const isVideo = isMotion || isEdit;
   // Videos come out at the source image's ratio; the API stores it on the job too.
-  const label = isMotion ? `${presetName(job.motion?.preset)} · ${job.motion?.durationS ?? '?'}s` : `${modelName(models, job.model)} · ${job.aspectRatio}`;
+  const label = isMotion
+    ? `${presetName(job.motion?.preset)} · ${job.motion?.durationS ?? '?'}s`
+    : isEdit
+      ? `Edit · ${job.edit ? `${job.edit.totalS.toFixed(1)}s · ${job.edit.clips.length} clip${job.edit.clips.length > 1 ? 's' : ''}` : job.aspectRatio}`
+      : `${modelName(models, job.model)} · ${job.aspectRatio}`;
 
   return (
     <motion.article
@@ -49,12 +55,12 @@ export function JobCard({ job, models, onOpen, onRemix, onAnimate }: Props) {
             {/* hover overlay */}
             <div className="pointer-events-none absolute inset-0 flex flex-col justify-between bg-gradient-to-t from-black/80 via-black/0 to-black/30 p-3 opacity-0 transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100">
               <div className="pointer-events-auto flex justify-end gap-1.5">
-                {!isMotion && onAnimate && (
+                {!isVideo && onAnimate && (
                   <IconBtn label="Animate this image" onClick={() => onAnimate(job.asset!.id)}>
                     <Clapperboard />
                   </IconBtn>
                 )}
-                {!isMotion && (
+                {!isVideo && (
                   <IconBtn label="Remix this prompt" onClick={() => onRemix?.(job.prompt)}>
                     <Wand2 />
                   </IconBtn>
@@ -76,14 +82,14 @@ export function JobCard({ job, models, onOpen, onRemix, onAnimate }: Props) {
               <span className="absolute inset-2 rounded-full bg-primary shadow-[0_0_24px_var(--glow)]" />
             </div>
             <p className="text-xs font-medium text-foreground/90">
-              {job.status === 'QUEUED' ? 'In queue…' : job.attempts > 1 ? `Retrying · attempt ${job.attempts}` : isMotion ? 'Rendering video…' : 'Rendering…'}
+              {job.status === 'QUEUED' ? 'In queue…' : job.attempts > 1 ? `Retrying · attempt ${job.attempts}` : isVideo ? 'Rendering video…' : 'Rendering…'}
             </p>
             <p className="line-clamp-2 max-w-[90%] text-[11px] text-muted-foreground">{job.prompt}</p>
           </div>
         ) : (
           <div className="flex size-full flex-col items-center justify-center gap-2 bg-[radial-gradient(circle_at_50%_40%,oklch(0.66_0.21_22/12%),transparent_60%)] p-4 text-center">
             <ImageOff className="size-6 text-muted-foreground" />
-            <p className="text-xs text-muted-foreground">{job.status === 'DONE' ? 'Image deleted' : job.error}</p>
+            <p className="text-xs text-muted-foreground">{job.status === 'DONE' ? (isVideo ? 'Video deleted' : 'Image deleted') : job.error}</p>
             {job.status === 'FAILED' && (
               <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-medium text-success">
                 <RotateCcw className="size-3" />
@@ -96,7 +102,7 @@ export function JobCard({ job, models, onOpen, onRemix, onAnimate }: Props) {
 
       <div className="flex items-center justify-between gap-2 px-3 py-2 text-[11px] text-muted-foreground">
         <span className="flex min-w-0 items-center gap-1.5">
-          {isMotion && <Clapperboard className="size-3 shrink-0 text-primary" />}
+          {isVideo && <Clapperboard className="size-3 shrink-0 text-primary" />}
           <span className="truncate">
             {label}
             {took && job.status === 'DONE' ? ` · ${took}` : ''}

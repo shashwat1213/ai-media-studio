@@ -8,6 +8,7 @@ import { GuestOnly, RequireAuth } from '@/features/auth/route-guards';
 const AppShell = lazy(() => import('@/components/layout/app-shell').then((m) => ({ default: m.AppShell })));
 const DashboardPage = lazy(() => import('@/pages/dashboard-page').then((m) => ({ default: m.DashboardPage })));
 const StudioPage = lazy(() => import('@/pages/studio-page').then((m) => ({ default: m.StudioPage })));
+const DirectorPage = lazy(() => import('@/pages/director-page').then((m) => ({ default: m.DirectorPage })));
 const GalleryPage = lazy(() => import('@/pages/gallery-page').then((m) => ({ default: m.GalleryPage })));
 const LoginPage = lazy(() => import('@/pages/login-page').then((m) => ({ default: m.LoginPage })));
 const RegisterPage = lazy(() => import('@/pages/register-page').then((m) => ({ default: m.RegisterPage })));
@@ -39,6 +40,7 @@ export default function App() {
               <Route path="/studio" element={<StudioPage />} />
               {/* Old link (bookmarks, README): keep it working. */}
               <Route path="/generate" element={<Navigate to="/studio" replace />} />
+              <Route path="/director" element={<DirectorPage />} />
               <Route path="/gallery" element={<GalleryPage />} />
             </Route>
           </Route>

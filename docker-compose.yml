@@ -30,6 +30,12 @@ x-app-env: &app-env
   # Free real AI: Cloudflare Workers AI (AI_PROVIDER=cloudflare). Values come from the root .env.
   CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
   CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+  # Local AI on THIS computer (scripts/local-ai/start.sh): director LLM + pictures/voice gateway.
+  # Unset = Scene Director runs on offline stubs; everything else is unaffected.
+  LOCAL_AI_URL: ${LOCAL_AI_URL:-}
+  LOCAL_LLM_URL: ${LOCAL_LLM_URL:-}
+  LOCAL_SCRIBE_URL: ${LOCAL_SCRIBE_URL:-}
+  LOCAL_AI_TOKEN: ${LOCAL_AI_TOKEN:-}
   LOG_LEVEL: ${LOG_LEVEL:-info}
   # Local-only defaults. Real deployments inject these from AWS Secrets Manager (Phase 5).
   METRICS_TOKEN: ${METRICS_TOKEN:-local-metrics-token-change-me}
@@ -138,6 +144,8 @@ services:
       # and browsers treat http://localhost as a secure context, so Secure cookies still work.
     ports:
       - "4000:4000"   # optional: direct access for curl/debugging; the browser goes through web
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # reach the local AI running on this computer
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -157,6 +165,8 @@ services:
       WORKER_PORT: "4001"
       HEALTH_PORT: "4001"        # the image's HEALTHCHECK reads this
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # reach the local AI running on this computer
     depends_on:
       api:
         condition: service_healthy # api's build creates the image; also = migrations done

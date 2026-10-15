@@ -1,9 +1,8 @@
-import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { MOTION_FPS, motionFilter, outputSize, type MotionPreset } from './motion.js';
-import { ProviderError } from './providers/types.js';
+import { runProcess } from '../../lib/run-process.js';
 
 export interface MotionRequest {
   image: Buffer;
@@ -28,8 +27,6 @@ export interface MotionRenderer {
   readonly name: string;
   render(req: MotionRequest): Promise<RenderedVideo>;
 }
-
-const MAX_STDERR = 4000;
 
 /**
  * Runs ffmpeg as a child process. Safety:
@@ -64,7 +61,7 @@ export function createFfmpegRenderer(opts: { ffmpegPath?: string; timeoutMs?: nu
           '-an',
           output,
         ];
-        await run(bin, args, timeoutMs, signal);
+        await runProcess(bin, args, { timeoutMs, signal });
         const data = await readFile(output);
         if (data.length === 0) throw new Error('ffmpeg produced an empty file');
         return { data, mimeType: 'video/mp4', width: out.w, height: out.h, durationMs: durationS * 1000 };
@@ -73,33 +70,4 @@ export function createFfmpegRenderer(opts: { ffmpegPath?: string; timeoutMs?: nu
       }
     },
   };
-}
-
-function run(bin: string, args: string[], timeoutMs: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(new Error('aborted'));
-    const child = spawn(bin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
-    let stderr = '';
-    child.stderr.on('data', (d: Buffer) => {
-      if (stderr.length < MAX_STDERR) stderr += d.toString();
-    });
-    const kill = () => child.kill('SIGKILL');
-    const timer = setTimeout(kill, timeoutMs);
-    signal?.addEventListener('abort', kill, { once: true });
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      // ENOENT = ffmpeg not installed: an ops problem, not the user's. Retrying won't help.
-      reject(
-        (err as NodeJS.ErrnoException).code === 'ENOENT'
-          ? new ProviderError(`ffmpeg not found at "${bin}"`, { retryable: false, userMessage: 'Video rendering is unavailable right now.' })
-          : err,
-      );
-    });
-    child.on('close', (code, sig) => {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', kill);
-      if (code === 0) resolve();
-      else reject(new Error(`ffmpeg exited with ${code ?? sig}: ${stderr.trim().slice(0, 500)}`));
-    });
-  });
 }
