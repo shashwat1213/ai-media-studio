@@ -105,6 +105,9 @@ function EmptyState() {
   );
 }
 
+/** Display names of the server's built-in music / ambience (stock-music.ts). */
+const STOCK_NAMES: Record<string, string> = { pulse: 'Dance Pulse', sunny: 'Sunny Pop', lofi: 'Lo-fi Chill', cinematic: 'Cinematic Rise', rain: 'Rain', ocean: 'Ocean waves', wind: 'Wind', city: 'City street', night: 'Night crickets' };
+
 // ---------------------------------------------------------------------------------------------
 // Composer with @mention suggestions
 
@@ -120,6 +123,7 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
   const [hdWanted, setHd] = useState(false);
   const [motionWanted, setMotion] = useState<'still' | 'hero' | 'ai'>('still');
   const [voice, setVoice] = useState('');
+  const [music, setMusic] = useState('auto');
   const [caret, setCaret] = useState(0);
 
   // Auto: the language the brief asks for ("English voice-over"), else the one it's written in.
@@ -156,7 +160,7 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
 
   async function submit() {
     try {
-      await create.mutateAsync({ prompt, language: choice, format, targetS, voice: chosenVoice || undefined, hd, motion });
+      await create.mutateAsync({ prompt, language: choice, format, targetS, voice: chosenVoice || undefined, hd, motion, music });
       toast.success('Scene started', {
         description:
           motion === 'ai'
@@ -275,6 +279,19 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
           options={videoReady ? [['still', 'Camera moves'], ['hero', 'Hero shots'], ['ai', 'AI video']] : [['still', 'Camera moves']]}
           onChange={(v) => setMotion(v as 'still' | 'hero' | 'ai')}
         />
+        <label className="space-y-1">
+          <span className="block text-[11px] text-muted-foreground">Music</span>
+          <select aria-label="Background music" value={music} onChange={(e) => setMusic(e.target.value)} className="h-9 w-40 rounded-lg border border-input bg-background px-2 text-sm">
+            <option value="auto">Auto (from the brief)</option>
+            {(cfg.data?.music ?? []).map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+                {m.bpm ? ` · ${m.bpm} bpm` : ''}
+              </option>
+            ))}
+            <option value="none">No music</option>
+          </select>
+        </label>
         <label className="min-w-0 flex-1 space-y-1 sm:max-w-64">
           <span className="block text-[11px] text-muted-foreground">Narrator</span>
           <select aria-label="Narrator voice" value={chosenVoice} onChange={(e) => setVoice(e.target.value)} className="h-9 w-full rounded-lg border border-input bg-background px-2 text-sm">
@@ -317,6 +334,7 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
           : language === 'hi'
             ? 'Hindi voice-over, captions in Devanagari.'
             : 'English voice-over and captions.'}
+        {music !== 'none' && ' Music is cut to the beat and dips under the voice; rain / waves / traffic named in the brief are added as ambience.'}
         {hd && ' HD: every shot is upscaled ×4 on the GPU (sharp at 1080×1920), ~45 s per shot.'}
         {motion === 'ai' && ` AI video: every shot really moves (people walk, dance, hair and clothes flow). Slow on this computer: about ${etaMin} min for ${targetS}s. It runs in the background.`}
         {motion === 'hero' && ` Hero shots: the opening and closing shots really move (fast preset), the others use camera moves. About ${etaMin} min.`}
@@ -391,6 +409,14 @@ function SceneCard({ scene }: { scene: Scene }) {
           )}
         </div>
       </div>
+      {(scene.script?.music || scene.script?.ambience) && (
+        <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <Music className="size-3.5" />
+          {scene.script.music && <span>Music: {STOCK_NAMES[scene.script.music.id] ?? scene.script.music.id}{scene.script.music.bpm && scene.script.beatS ? ` · cuts on the beat (${scene.script.music.bpm} bpm)` : ''}</span>}
+          {scene.script.music && scene.script.ambience && <span aria-hidden>·</span>}
+          {scene.script.ambience && <span>Ambience: {STOCK_NAMES[scene.script.ambience.id] ?? scene.script.ambience.id}</span>}
+        </p>
+      )}
       {scene.status === 'FAILED' && scene.error && <p className="text-xs text-destructive">{scene.error} Pictures already made are kept; Retry continues from there.</p>}
 
       {shots.length > 0 ? (

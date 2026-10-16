@@ -8,7 +8,10 @@ import { createStubSpeech } from '../audio/speech.js';
 import { EditRequestSchema, normaliseEdit, type UploadInfo } from '../editor/edit-spec.js';
 import type { PublicItem } from '../library/library.js';
 import { createStubDirector, type DirectorModel } from './director.js';
-import { alignCaptionWords, buildDraft, isHeroShot, shotLength, faceCharacterFor, imagePromptFor, pickSound, produceScene, shotStarts, type SceneScript } from './scene.js';
+import { beatUnitS, matchStock, snapToBeat, stockArgs, STOCK_TRACKS } from '../audio/stock-music.js';
+import { runProcess } from '../../lib/run-process.js';
+import { probeMedia } from '../editor/probe.js';
+import { alignCaptionWords, buildDraft, chooseStock, isHeroShot, sceneLength, shotLength, faceCharacterFor, imagePromptFor, pickSound, produceScene, shotStarts, type SceneScript } from './scene.js';
 import { failAndRefund, SCENE_COST, sceneCost, SCENE_AI_MOTION_EXTRA, SCENE_HD_EXTRA, SCENE_HERO_MOTION_EXTRA } from './scenes.routes.js';
 import { picturesFromEnv } from './index.js';
 import type { ClipRequest, PictureEngine, PictureRequest } from './local-ai.js';
@@ -84,6 +87,87 @@ describe('scene (pure)', () => {
   });
 });
 
+describe('stock music + beat sync (pure)', () => {
+  it('matchStock: tags from the brief/sounds pick the bed; nothing matching -> null', () => {
+    expect(matchStock('a girl dancing in the rain at a party', 'music')?.id).toBe('pulse');
+    expect(matchStock('cozy chai on a calm evening', 'music')?.id).toBe('lofi');
+    expect(matchStock('a motivational story, emotional', 'music')?.id).toBe('cinematic');
+    expect(matchStock('heavy rain on the street', 'ambience')?.id).toBe('rain');
+    expect(matchStock('ocean waves, light wind', 'ambience')?.id).toBe('ocean');
+    expect(matchStock('a quiet library', 'ambience')).toBeNull();
+  });
+
+  it('beat unit: one beat for slow music, half a bar (2 beats) for fast music', () => {
+    expect(beatUnitS(120)).toBe(1);
+    expect(beatUnitS(104)).toBeCloseTo(1.154, 3);
+    expect(beatUnitS(84)).toBeCloseTo(0.714, 3);
+    expect(beatUnitS(70)).toBeCloseTo(0.857, 3);
+  });
+
+  it('snapToBeat: the step to the next clip (length - crossfade) is a whole number of beats, never shorter', () => {
+    expect(snapToBeat(4, 1, 0.5)).toBe(4.5); // 3.5 -> 4 beats
+    expect(snapToBeat(4.5, 1, 0.5)).toBe(4.5); // already on the beat
+    expect(snapToBeat(0.6, 1, 0.5)).toBe(1.5); // at least one beat
+    for (const len of [2, 3.3, 5.75, 7.9]) {
+      const s = snapToBeat(len, 0.714, 0.5);
+      expect(s).toBeGreaterThanOrEqual(len);
+      expect(((s - 0.5) / 0.714) % 1).toBeLessThan(0.01);
+    }
+  });
+
+  it('with a beat, every shot starts exactly on a beat of the music', () => {
+    const script: SceneScript = {
+      title: 'T', mood: 'upbeat', language: 'en', format: '9:16', beatS: beatUnitS(120),
+      shots: [shot({ imageUploadId: 'a', voiceS: 3.1 }), shot({ imageUploadId: 'b', durationS: 2.7 }), shot({ imageUploadId: 'c', voiceS: 4.4 })],
+    };
+    const starts = shotStarts(script);
+    for (const t of starts) expect(Math.abs(t - Math.round(t))).toBeLessThan(0.002); // 1 s unit
+    expect(sceneLength(script)).toBe(starts[2]! + shotLength(script.shots[2]!, script.beatS));
+    // the draft clips use the same snapped lengths
+    expect((buildDraft(script).clips as { durationS: number }[]).map((c) => c.durationS)).toEqual(script.shots.map((s) => shotLength(s, script.beatS)));
+  });
+
+  it('chooseStock: user choice > brief words > mood; a library music bed wins; ambience only when named', () => {
+    const sc = (mood: string, sound = '') => ({ mood, shots: [shot({ sound })] });
+    expect(chooseStock('auto', 'a girl dancing', sc('calm'), null).music?.id).toBe('pulse'); // brief beats mood
+    expect(chooseStock('auto', 'a long walk', sc('dramatic'), null).music?.id).toBe('cinematic'); // mood fallback
+    expect(chooseStock('auto', 'a long walk', sc('weird'), null).music?.id).toBe('lofi'); // unknown mood
+    // the mood beats a stray word in a sound line; the brief beats the mood
+    expect(chooseStock('auto', 'a man shouting in angry mode', sc('dramatic', 'soft wind, quiet hum'), null).music?.id).toBe('cinematic');
+    expect(chooseStock('auto', 'a man walks', sc('dramatic', 'soft wind, quiet hum'), null).music?.id).toBe('cinematic');
+    expect(chooseStock('auto', 'a man walks', sc('weird', 'quiet hum'), null).music?.id).toBe('lofi'); // no mood -> sound words
+    expect(chooseStock('sunny', 'a girl dancing', sc('calm'), null).music?.id).toBe('sunny'); // user's pick
+    expect(chooseStock('none', 'a girl dancing', sc('calm'), null).music).toBeNull();
+    expect(chooseStock('rain', 'x', sc('calm'), null).music).toBeNull(); // an ambience id is not music
+    const libMusic = item('mine', 'SOUND', 'my song', { uploadId: 'u', role: 'music' });
+    expect(chooseStock('auto', 'a girl dancing', sc('calm'), libMusic).music).toBeNull();
+    expect(chooseStock('auto', 'walk', sc('calm', 'heavy rain, thunder'), null).ambience?.id).toBe('rain');
+    expect(chooseStock('auto', 'walk', sc('calm', 'soft ambience'), null).ambience).toBeNull();
+    const libRain = item('myrain', 'SOUND', 'rain', { uploadId: 'u', role: 'ambience' });
+    expect(chooseStock('auto', 'walk', sc('calm', 'heavy rain'), libRain).ambience).toBeNull();
+  });
+
+  it('every stock track renders with real ffmpeg: exact length, audible, no clipping', async () => {
+    const dir = await import('node:fs/promises').then((fs) => fs.mkdtemp('/tmp/stock-test-'));
+    try {
+      for (const t of STOCK_TRACKS) {
+        const out = `${dir}/${t.id}.mp3`;
+        await runProcess('ffmpeg', stockArgs(t.id, 3.25, out), { timeoutMs: 60_000 });
+        const info = await probeMedia(out, 'audio/mpeg');
+        expect(Math.abs((info.durationMs ?? 0) - 3250)).toBeLessThan(80);
+        const { stderr } = await runProcess('ffmpeg', ['-hide_banner', '-nostdin', '-i', out, '-af', 'volumedetect', '-f', 'null', '-'], { timeoutMs: 30_000 });
+        const mean = Number(/mean_volume: (\S+)/.exec(stderr)?.[1]);
+        const max = Number(/max_volume: (\S+)/.exec(stderr)?.[1]);
+        expect(mean, t.id).toBeGreaterThan(-30);
+        expect(max, t.id).toBeLessThanOrEqual(-0.5);
+      }
+    } finally {
+      await import('node:fs/promises').then((fs) => fs.rm(dir, { recursive: true, force: true }));
+    }
+    expect(() => stockArgs('nope', 3, '/tmp/x.mp3')).toThrow();
+  }, 60_000);
+});
+
 // -------------------------------------------------------------------------------------------
 // The same stub the worker uses without a local AI (honours `upscale` by returning the HD size).
 const stubPictures: PictureEngine = picturesFromEnv({} as SharedEnv);
@@ -124,7 +208,8 @@ describe('produceScene (stub engines, real DB + storage + ffmpeg)', () => {
     );
     const spec = normaliseEdit(EditRequestSchema.parse(draft), infos);
     expect(spec.clips).toHaveLength(3);
-    expect(spec.audio).toHaveLength(1);
+    expect(spec.audio).toHaveLength(2); // narration + the auto music bed (ducked)
+    expect(spec.audio[1]).toMatchObject({ duck: true });
     expect(spec.autoCaptions?.words.length).toBeGreaterThan(0);
     expect(spec.format).toBe('9:16');
 
@@ -190,15 +275,15 @@ describe('produceScene (stub engines, real DB + storage + ffmpeg)', () => {
     const engine: PictureEngine = { ...stubPictures, name: 'spy', clip: (r, sig) => (clips.push({ prompt: r.prompt, seconds: r.seconds, refBytes: r.ref.length }), stubPictures.clip!(r, sig)) };
     expect(await produceScene(s.id, deps(createStubDirector(), engine))).toBe('ready');
     const done = await prisma.scene.findUniqueOrThrow({ where: { id: s.id } });
-    const shots = (done.script as unknown as SceneScript).shots;
+    const { shots, beatS } = done.script as unknown as SceneScript;
     expect(clips.length).toBe(shots.length);
     expect(clips.every((c) => c.refBytes > 0 && c.prompt.length > 0)).toBe(true);
     for (const sh of shots) {
       const v = await prisma.upload.findUniqueOrThrow({ where: { id: sh.videoUploadId! } });
       expect(v).toMatchObject({ userId: u.id, source: 'AI_VIDEO', mimeType: 'video/mp4', hasAudio: false });
-      expect(Math.abs((v.durationMs ?? 0) / 1000 - shotLength(sh))).toBeLessThan(0.15); // the clip covers its shot
+      expect(Math.abs((v.durationMs ?? 0) / 1000 - shotLength(sh, beatS))).toBeLessThan(0.15); // the clip covers its shot
     }
-    expect(clips.map((c) => c.seconds)).toEqual(shots.map((sh) => shotLength(sh)));
+    expect(clips.map((c) => c.seconds)).toEqual(shots.map((sh) => shotLength(sh, beatS)));
     const draftClips = (done.draft as { clips: { uploadId: string; trimEndS?: number; motion?: string }[] }).clips;
     expect(draftClips.map((c) => c.uploadId)).toEqual(shots.map((sh) => sh.videoUploadId));
     expect(draftClips.every((c) => c.motion === undefined && c.trimEndS! > 0)).toBe(true);
@@ -213,6 +298,41 @@ describe('produceScene (stub engines, real DB + storage + ffmpeg)', () => {
     const still = await prisma.scene.create({ data: { userId: u.id, prompt: '@riya smiles.', language: 'en', format: '1:1', targetS: 6, voice: 'narrator' } });
     expect(await produceScene(still.id, deps(createStubDirector(), engine))).toBe('ready');
     expect(clips).toHaveLength(0);
+  }, 90_000);
+
+  it('music: a dance brief gets the dance bed, cut on its beat, rendered to the scene length, ducked; "none" has none', async () => {
+    const u = await userWithLibrary();
+    const s = await prisma.scene.create({ data: { userId: u.id, prompt: '@riya dancing in the rain. She spins. Sound: heavy rain.', language: 'en', format: '9:16', targetS: 12, voice: 'narrator' } });
+    expect(await produceScene(s.id, deps())).toBe('ready');
+    const done = await prisma.scene.findUniqueOrThrow({ where: { id: s.id } });
+    const script = done.script as unknown as SceneScript;
+    expect(script.music).toMatchObject({ id: 'pulse', bpm: 120, uploadId: expect.any(String) });
+    expect(script.ambience).toMatchObject({ id: 'rain', uploadId: expect.any(String) });
+    expect(script.beatS).toBe(1);
+    for (const t of shotStarts(script)) expect(Math.abs(t - Math.round(t))).toBeLessThan(0.002);
+    const music = await prisma.upload.findUniqueOrThrow({ where: { id: script.music!.uploadId! } });
+    expect(music).toMatchObject({ userId: u.id, source: 'MUSIC', mimeType: 'audio/mpeg', hasAudio: true });
+    expect(Math.abs((music.durationMs ?? 0) / 1000 - sceneLength(script))).toBeLessThan(0.1);
+    const audio = (done.draft as { audio: { uploadId: string; duck: boolean }[] }).audio;
+    expect(audio.map((a) => a.uploadId)).toEqual(expect.arrayContaining([script.music!.uploadId, script.ambience!.uploadId]));
+    expect(audio.filter((a) => a.uploadId !== audio[0]!.uploadId).every((a) => a.duck)).toBe(true);
+    // the editor accepts it (<= 4 audio tracks, real files)
+    const uploads = await prisma.upload.findMany({ where: { userId: u.id } });
+    const infos = new Map<string, UploadInfo>(uploads.map((x) => [x.id, { id: x.id, kind: x.mimeType.startsWith('audio/') ? 'audio' : 'image', durationMs: x.durationMs, hasAudio: x.hasAudio, words: (x.transcript as { words?: UploadInfo['words'] } | null)?.words ?? null }]));
+    expect(normaliseEdit(EditRequestSchema.parse(done.draft), infos).audio).toHaveLength(3);
+
+    // retry keeps the same rendered files
+    await prisma.scene.update({ where: { id: s.id }, data: { status: 'PRODUCING', draft: Prisma.DbNull } });
+    expect(await produceScene(s.id, deps())).toBe('ready');
+    const again = (await prisma.scene.findUniqueOrThrow({ where: { id: s.id } })).script as unknown as SceneScript;
+    expect(again.music!.uploadId).toBe(script.music!.uploadId);
+    expect(await prisma.upload.count({ where: { userId: u.id, source: 'MUSIC' } })).toBe(2);
+
+    const quiet = await prisma.scene.create({ data: { userId: u.id, prompt: '@riya dancing.', language: 'en', format: '9:16', targetS: 8, voice: 'narrator', music: 'none' } });
+    expect(await produceScene(quiet.id, deps())).toBe('ready');
+    const q = (await prisma.scene.findUniqueOrThrow({ where: { id: quiet.id } })).script as unknown as SceneScript;
+    expect(q.music).toBeUndefined();
+    expect(q.beatS).toBeUndefined();
   }, 90_000);
 
   it('hero shots: only the first and last shot move, with the fast preset; the middle keeps camera moves', async () => {
@@ -300,7 +420,10 @@ describe('scenes API', () => {
     expect((await request(app).post('/scenes').set('Cookie', cookie).send({ prompt: 'a cat', voice: 'nobody' })).status).toBe(400);
     expect((await request(app).post('/scenes').set('Cookie', cookie).send({ prompt: 'x', voice: 'luna' })).status).toBe(400);
     const r = await request(app).post('/scenes').set('Cookie', cookie).send({ prompt: 'a cat in Goa', voice: 'luna', targetS: 15 }).expect(202);
-    expect(r.body.scene).toMatchObject({ status: 'PLANNING', language: 'en', format: '9:16', targetS: 15 }); // auto: written in English
+    expect(r.body.scene).toMatchObject({ status: 'PLANNING', language: 'en', format: '9:16', targetS: 15, music: 'auto' }); // auto: written in English
+    expect(cfg.body.music.map((m: { id: string }) => m.id)).toEqual(['pulse', 'sunny', 'lofi', 'cinematic']);
+    expect((await request(app).post('/scenes').set('Cookie', cookie).send({ prompt: 'a cat', music: 'rain' })).status).toBe(400); // ambience is not a music choice
+    expect((await request(app).post('/scenes').set('Cookie', cookie).send({ prompt: 'a cat', music: '../etc' })).status).toBe(400);
     expect(enqueued).toContain(r.body.scene.id);
     expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).credits).toBe(50 - SCENE_COST);
 

@@ -106,3 +106,20 @@ Each step: measure VRAM/time first, keep the stub path for CI, same job/credit/r
 ## Honest limits
 - 4 GB is the ceiling: one model at a time; video models are the stretch goal, not a promise.
 - Disk: models live on /mnt/ubuntu-storage (600+ GB free); each step lists its download size before it starts.
+
+### Wan2GP (DeepBeepMeep, Python/PyTorch) vs our sd-cli VACE — measured 16 Oct 2026
+Same AI-generated "Riya" reference, same prompt (beach dance at sunset), seed 42, 33 frames @16 fps, RTX 3050 4 GB.
+| | Wan2GP `fun_inp_1.3B` (image-to-video), profile 4.5, sdpa | sd-cli VACE 1.3B q5 + CausVid (reference-to-video) |
+|---|---|---|
+| Steps | 20 (no speed LoRA) | 8 |
+| Time | **420 s** (load 40 s, 20 × ~18 s, VAE decode 25 s) | **435 s** |
+| Peak VRAM | **2.7 GB** (weights mostly in RAM, offloaded) | 3.2 GB |
+| Output | 624×624 (square: it keeps the input picture's frame) | 480×832 |
+| Identity | Near-perfect (it starts FROM the picture) | Close (face a bit rounder) |
+| Motion / scene | Stays in the reference shot: smiles, head turns, a hand gesture; **no new scene, no dance** | New scene (beach), full body, real dance: spin, arms out, dress swirls |
+| Download | ~13 GB extra (own umt5 int8 6.7 GB + models; can't share our GGUFs) | already installed |
+- Verdict: **keep sd-cli VACE as the engine.** Image-to-video only animates the picture it's given, so its value is
+  "animate a shot picture exactly", not "put the character into a new scene".
+- Worth one more test later: Wan2GP i2v on a real full-body SHOT picture (made by IP-Adapter in the scene) with a
+  speed LoRA (4–8 steps). That would give perfect picture→video continuity in ~2–3 min per clip.
+- Outputs: `~/Downloads/wan2gp-riya-i2v-20steps.mp4`, comparison strip `~/Downloads/wan2gp-vs-vace-compare.png`.

@@ -10,6 +10,7 @@ import { probeMedia } from '../editor/probe.js';
 import type { SpeechProvider, Word } from '../audio/speech.js';
 import type { PublicItem } from '../library/library.js';
 import { ProviderError } from '../generation/providers/types.js';
+import { beatUnitS, matchStock, snapToBeat, stockArgs, stockTrack, type StockTrack } from '../audio/stock-music.js';
 import { direct, spokenLanguage, type DirectorModel, type SceneLanguage, type Script, type Shot } from './director.js';
 import type { PictureEngine } from './local-ai.js';
 
@@ -41,6 +42,14 @@ export interface SceneScript extends Omit<Script, 'shots'> {
   shots: SceneShot[];
   /** Library SOUND chosen as the bed, if any. */
   soundUploadId?: string;
+  /** Built-in music bed (stock-music.ts) chosen after planning; shots are cut on its beat. */
+  music?: { id: string; bpm?: number; uploadId?: string };
+  /** Built-in ambience (rain, ocean…) matched from the sound descriptions. */
+  ambience?: { id: string; uploadId?: string };
+  /** Beat unit (s) every cut snaps to; set when music with a tempo is chosen. */
+  beatS?: number;
+  /** Music/ambience were chosen (once per scene). */
+  stockChosen?: boolean;
 }
 
 export const SCENE_FORMAT_PX: Record<string, { w: number; h: number }> = {
@@ -107,15 +116,60 @@ export const isHeroShot = (i: number, n: number) => i === 0 || i === n - 1;
 
 /** Where each shot starts on the output timeline (clips overlap by the 0.5 s crossfade). Pure. */
 export const SCENE_TRANSITION_S = 0.5;
-export const shotLength = (s: SceneShot) => Math.round(Math.max(s.durationS, (s.voiceS ?? 0) + 0.6) * 100) / 100;
+/**
+ * How long a shot is on screen: its planned duration, or longer when its narration needs it. With a
+ * beat (`beatS`), lengthened so every cut lands on the music's beat (see snapToBeat). Pure.
+ */
+export const shotLength = (s: SceneShot, beatS?: number) => {
+  const base = Math.round(Math.max(s.durationS, (s.voiceS ?? 0) + 0.6) * 100) / 100;
+  return beatS ? snapToBeat(base, beatS, SCENE_TRANSITION_S) : base;
+};
 export function shotStarts(script: SceneScript): number[] {
   const starts: number[] = [];
   let t = 0;
   for (const s of script.shots) {
-    starts.push(Math.round(t * 100) / 100);
-    if (s.imageUploadId) t += shotLength(s) - SCENE_TRANSITION_S;
+    starts.push(Math.round(t * 1000) / 1000);
+    if (s.imageUploadId) t += shotLength(s, script.beatS) - SCENE_TRANSITION_S;
   }
   return starts;
+}
+/** Total length of the scene's video (the last shot's end). Pure. */
+export function sceneLength(script: SceneScript): number {
+  const starts = shotStarts(script);
+  let end = 0;
+  script.shots.forEach((s, i) => {
+    if (s.imageUploadId) end = starts[i]! + shotLength(s, script.beatS);
+  });
+  return Math.round(end * 1000) / 1000;
+}
+
+/** Mood word (from the director) -> a stock music bed, when the brief itself names nothing. */
+const MOOD_MUSIC: Record<string, string> = { upbeat: 'sunny', calm: 'lofi', romantic: 'lofi', dramatic: 'cinematic', epic: 'cinematic', mysterious: 'cinematic', sad: 'cinematic', tense: 'cinematic', angry: 'cinematic', energetic: 'pulse', happy: 'sunny' };
+
+/**
+ * Built-in music + ambience for a scene. Music: the user's choice ('none' / a track id), else (auto)
+ * what the BRIEF and the shots' sound lines name ("dance", "chai", "motivational"), else the
+ * director's mood. Skipped when the user's own library already gave a music bed. Ambience: only when
+ * the sound lines / brief name one (rain, waves, traffic…) and the library gave no ambience. Pure.
+ */
+export function chooseStock(
+  choice: string,
+  brief: string,
+  script: Pick<SceneScript, 'mood' | 'shots'>,
+  libraryBed: PublicItem | null,
+): { music: StockTrack | null; ambience: StockTrack | null } {
+  const sounds = script.shots.map((s) => s.sound).join(' ');
+  const bedRole = libraryBed?.settings.role;
+  let music: StockTrack | null = null;
+  if (choice !== 'none' && bedRole !== 'music') {
+    // Priority: the user's words (brief) > the director's mood > words in its sound lines. A stray
+    // "quiet hum" in one shot's sound line must not turn an angry, dramatic scene into lo-fi.
+    const mood = MOOD_MUSIC[script.mood.toLowerCase()];
+    music = choice !== 'auto' ? stockTrack(choice) : (matchStock(brief, 'music') ?? (mood ? stockTrack(mood) : null) ?? matchStock(sounds, 'music') ?? stockTrack('lofi'));
+    if (music?.role !== 'music') music = null;
+  }
+  const ambience = bedRole === 'ambience' ? null : matchStock(`${sounds} ${brief}`, 'ambience');
+  return { music, ambience };
 }
 
 /**
@@ -130,7 +184,7 @@ export function buildDraft(script: SceneScript) {
   const texts: unknown[] = [];
   script.shots.forEach((s, i) => {
     if (!s.imageUploadId) return;
-    const len = shotLength(s);
+    const len = shotLength(s, script.beatS);
     clips.push(
       s.videoUploadId
         ? { uploadId: s.videoUploadId, trimStartS: 0, trimEndS: len, fit: 'cover', volume: 0 }
@@ -263,6 +317,19 @@ export async function produceScene(sceneId: string, deps: ProduceDeps, signal?: 
       if (count === 0) throw new SceneStopped();
     }
 
+    // 1b) Music, chosen now so every shot (and every AI-video clip) is cut to its beat.
+    // Once per scene (a retry keeps the choice). Never re-time a scene whose AI clips already exist.
+    if (!script.stockChosen) {
+      const bed = pickSound(script.shots.map((s) => s.sound).join(' '), script.mood, library.filter((i) => i.kind === 'SOUND'));
+      const { music, ambience } = chooseStock(scene.music, scene.prompt, script, bed);
+      script.music = music ? { id: music.id, bpm: music.bpm } : undefined;
+      script.ambience = ambience ? { id: ambience.id } : undefined;
+      const madeClips = script.shots.some((s) => s.videoUploadId);
+      script.beatS = music?.bpm && !madeClips ? beatUnitS(music.bpm) : undefined;
+      script.stockChosen = true;
+      await prisma.scene.update({ where: { id: sceneId }, data: { script: script as unknown as Prisma.InputJsonValue } });
+    }
+
     const px = SCENE_FORMAT_PX[scene.format] ?? SCENE_FORMAT_PX['9:16']!;
     const n = script.shots.length;
     const faceCache = new Map<string, Buffer | null>();
@@ -315,7 +382,7 @@ export async function produceScene(sceneId: string, deps: ProduceDeps, signal?: 
         const preset = scene.motion === 'hero' ? 'fast' : 'full';
         await progress(scene.motion === 'hero' ? `Moving shot ${i + 1} (hero, ~3 min)…` : `Moving shot ${i + 1} of ${n} (AI video, ~7 min each)…`);
         const pic = await prisma.upload.findFirstOrThrow({ where: { id: s.imageUploadId, userId: scene.userId } });
-        const len = shotLength(s);
+        const len = shotLength(s, script.beatS);
         const clip = await deps.pictures.clip({ prompt: s.visual, ref: await deps.storage.get(pic.storageKey), width: px.w, height: px.h, seconds: len, seed: s.seed, preset }, signal);
         const f = path.join(dir, `m${i}.mp4`);
         await writeFile(f, clip.data);
@@ -367,6 +434,25 @@ export async function produceScene(sceneId: string, deps: ProduceDeps, signal?: 
       }
     }
     if (script.soundUploadId) audioTracks.push({ uploadId: script.soundUploadId, atS: 0, trimStartS: 0, volume: 0.45, duck: true });
+    // Built-in music / ambience, rendered to the scene's exact length (beat 1 = the first frame).
+    // Both duck under the narration; ambience sits lower. Kept on the script so a retry reuses them.
+    const total = sceneLength(script);
+    for (const key of ['music', 'ambience'] as const) {
+      const pick = script[key];
+      const track = pick ? stockTrack(pick.id) : null;
+      if (!pick || !track || total <= 0) continue;
+      if (!pick.uploadId) {
+        await progress(key === 'music' ? `Music: ${track.name}…` : `Ambience: ${track.name}…`);
+        const f = path.join(dir, `${key}.mp3`);
+        await runProcess(deps.ffmpegPath ?? 'ffmpeg', stockArgs(track.id, total, f), { timeoutMs: 120_000, signal });
+        const data = await readFile(f);
+        const info = await probeMedia(f, 'audio/mpeg');
+        const up = await saveUpload(deps, scene.userId, data, 'audio/mpeg', 'mp3', `${track.name}.mp3`, { source: 'MUSIC', hasAudio: true, durationMs: info.durationMs, script: track.id });
+        pick.uploadId = up.id;
+        await prisma.scene.update({ where: { id: sceneId }, data: { script: script as unknown as Prisma.InputJsonValue } });
+      }
+      audioTracks.push({ uploadId: pick.uploadId, atS: 0, trimStartS: 0, volume: track.volume, duck: true });
+    }
     const finalDraft = { ...draft, audio: audioTracks, autoCaptions };
 
     const { count: finished } = await prisma.scene.updateMany({

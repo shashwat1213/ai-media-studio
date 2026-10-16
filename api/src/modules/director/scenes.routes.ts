@@ -7,6 +7,7 @@ import { HttpError, notFound, tooManyRequests } from '../../lib/errors.js';
 import { applyDebit, applyGrant } from '../credits/credits.service.js';
 import { requireAuth } from '../auth/require-auth.js';
 import type { Voice } from '../audio/speech.js';
+import { MUSIC_IDS, STOCK_TRACKS } from '../audio/stock-music.js';
 import type { Storage } from '../../lib/storage.js';
 import { DIRECTOR_LIMITS, detectLanguage, SCENE_LANGUAGE_CHOICES, spokenLanguage } from './director.js';
 import { DEFAULT_NARRATOR, voiceLanguage } from './local-ai.js';
@@ -38,6 +39,8 @@ const CreateScene = z.object({
   hd: z.boolean().default(false),
   /** 'ai' = every shot animated by the local AI (Wan VACE). Slow (~7 min per shot); needs the Wan models. */
   motion: z.enum(['still', 'hero', 'ai']).default('still'),
+  /** Background music: 'auto' (from the brief/mood, shots cut on the beat), 'none', or a built-in track id. */
+  music: z.enum(['auto', 'none', ...MUSIC_IDS] as [string, ...string[]]).default('auto'),
 });
 const IdParam = z.object({ id: z.string().uuid() });
 const parseId = (p: unknown) => {
@@ -46,7 +49,7 @@ const parseId = (p: unknown) => {
   return r.data.id;
 };
 
-const publicScene = (s: { id: string; prompt: string; language: string; format: string; targetS: number; voice: string; hd: boolean; motion: string; status: string; title: string | null; script: unknown; draft: unknown; progress: string | null; error: string | null; createdAt: Date; updatedAt: Date }) => s;
+const publicScene = (s: { id: string; prompt: string; language: string; format: string; targetS: number; voice: string; hd: boolean; motion: string; music: string; status: string; title: string | null; script: unknown; draft: unknown; progress: string | null; error: string | null; createdAt: Date; updatedAt: Date }) => s;
 
 export function scenesRouter(opts: {
   prisma: PrismaClient;
@@ -75,7 +78,7 @@ export function scenesRouter(opts: {
   const limiter = rateLimit({ windowMs: 60_000, limit: opts.rateLimit, standardHeaders: 'draft-8', legacyHeaders: false, keyGenerator: (req) => req.userId!, message: { error: 'Too many requests, slow down' } });
 
   router.get('/scenes/config', auth, async (_req, res) => {
-    res.json({ cost: SCENE_COST, hdCost: sceneCost(true), aiMotionExtra: SCENE_AI_MOTION_EXTRA, heroMotionExtra: SCENE_HERO_MOTION_EXTRA, limits: DIRECTOR_LIMITS, voices: opts.voices(), localAi: await opts.localAi() });
+    res.json({ cost: SCENE_COST, hdCost: sceneCost(true), aiMotionExtra: SCENE_AI_MOTION_EXTRA, heroMotionExtra: SCENE_HERO_MOTION_EXTRA, limits: DIRECTOR_LIMITS, music: STOCK_TRACKS.filter((t) => t.role === 'music').map(({ id, name, bpm }) => ({ id, name, bpm })), voices: opts.voices(), localAi: await opts.localAi() });
   });
 
   router.get('/scenes', auth, async (req, res) => {
@@ -128,7 +131,7 @@ export function scenesRouter(opts: {
     if (input.hd && !ai!.upscale) throw new HttpError(409, 'HD pictures need the upscaler. Run scripts/local-ai/install.sh and start the local AI.');
     if (input.motion !== 'still' && !ai!.video) throw new HttpError(409, 'AI video needs the Wan models. Run scripts/local-ai/install.sh and start the local AI.');
     const scene = await prisma.$transaction(async (tx) => {
-      const s = await tx.scene.create({ data: { userId, prompt: input.prompt, language, format: input.format, targetS: input.targetS, hd: input.hd, motion: input.motion, voice: item && voice === input.voice ? item.handle : voice! } });
+      const s = await tx.scene.create({ data: { userId, prompt: input.prompt, language, format: input.format, targetS: input.targetS, hd: input.hd, motion: input.motion, music: input.music, voice: item && voice === input.voice ? item.handle : voice! } });
       await applyDebit(tx, userId, sceneCost(s.hd, s.motion as SceneMotion), 'GENERATION', `scene:${s.id}`);
       return s;
     });

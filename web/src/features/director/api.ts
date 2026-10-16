@@ -44,10 +44,12 @@ export interface Scene {
   hd: boolean;
   /** 'ai' = every shot is a moving AI-video clip. */
   motion: 'still' | 'hero' | 'ai';
+  /** 'auto' | 'none' | a built-in music track id. */
+  music: string;
   voice: string;
   status: 'PLANNING' | 'PRODUCING' | 'READY' | 'FAILED';
   title: string | null;
-  script: { title: string; mood: string; shots: SceneShot[]; soundUploadId?: string } | null;
+  script: { title: string; mood: string; shots: SceneShot[]; soundUploadId?: string; music?: { id: string; bpm?: number }; ambience?: { id: string }; beatS?: number } | null;
   draft: (EditRequest & { totalS?: number }) | null;
   progress: string | null;
   error: string | null;
@@ -58,6 +60,8 @@ export interface Scene {
 export interface ScenesConfig {
   cost: number;
   limits: { shots: number; maxTotalS: number; prompt: number };
+  /** Built-in music beds (synthesised on the server, free). */
+  music: { id: string; name: string; bpm?: number }[];
   voices: Voice[];
   localAi: { llm: boolean; image: boolean; upscale: boolean; faceRef: boolean; video: boolean };
   hdCost: number;
@@ -111,7 +115,7 @@ export function useScenes() {
 export function useCreateScene() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { prompt: string; language: SceneLanguage | 'auto'; format: Scene['format']; targetS: number; voice?: string; hd: boolean; motion: 'still' | 'hero' | 'ai' }) =>
+    mutationFn: (body: { prompt: string; language: SceneLanguage | 'auto'; format: Scene['format']; targetS: number; voice?: string; hd: boolean; motion: 'still' | 'hero' | 'ai'; music: string }) =>
       api<{ scene: Scene }>('/scenes', { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: scenesKey });

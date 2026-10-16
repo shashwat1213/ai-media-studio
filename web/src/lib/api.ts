@@ -147,7 +147,7 @@ export interface Upload {
   mimeType: string;
   kind: 'image' | 'video' | 'audio';
   hasAudio: boolean;
-  source: 'UPLOAD' | 'RECORDING' | 'TTS' | 'AI_IMAGE';
+  source: 'UPLOAD' | 'RECORDING' | 'TTS' | 'AI_IMAGE' | 'AI_VIDEO' | 'MUSIC';
   script: string | null;
   voice: string | null;
   transcriptStatus: 'NONE' | 'PENDING' | 'DONE' | 'FAILED';

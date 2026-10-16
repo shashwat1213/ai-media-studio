@@ -15,7 +15,7 @@ export interface PublicUpload {
   height: number | null;
   durationMs: number | null;
   hasAudio: boolean;
-  source: 'UPLOAD' | 'RECORDING' | 'TTS' | 'AI_IMAGE' | 'AI_VIDEO';
+  source: 'UPLOAD' | 'RECORDING' | 'TTS' | 'AI_IMAGE' | 'AI_VIDEO' | 'MUSIC';
   /** TTS: what was said, and the voice. */
   script: string | null;
   voice: string | null;

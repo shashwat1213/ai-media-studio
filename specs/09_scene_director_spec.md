@@ -79,3 +79,25 @@ Library (character, place, Hindi narrator) → brief with @ suggestions → **RE
 - Honest limits: the 4B LLM still writes some odd Hindi lines when it has to invent them ("घंटा भी घंटा"); SD 1.5 can
   still drift on a character's look/ethnicity between shots (G1 / reference image will fix that). Lines given in the
   brief are used word for word, so writing your own VO lines gives the best result today.
+
+---
+
+## Music + beat sync (16 Oct 2026)
+- **Built-in beds, synthesised by ffmpeg** (`api/src/modules/audio/stock-music.ts`): no files shipped, no licence, no
+  download. Music: Dance Pulse 120 bpm, Sunny Pop 104, Lo-fi Chill 84, Cinematic Rise 70. Ambience: rain, ocean, wind,
+  city street, night crickets. Each is a deterministic recipe (kick/hat/clap/bass/pad/arp layers) rendered to the
+  scene's exact length with fades; ~1.5 s per 20 s of music, ~0.2 s for ambience. Mean levels -15..-21 dB, peaks <= -4 dB.
+- `Scene.music` = `auto` (default) / `none` / a track id (migration `scene_music`, + `UploadSource.MUSIC`).
+  Auto = tags in the BRIEF + the shots' sound lines ("dancing" -> Dance Pulse, "chai" -> Lo-fi), else the director's mood.
+  A music SOUND from the user's own library wins. Ambience only when named (rain, waves, traffic…).
+- **Beat sync:** chosen right after planning, before any picture/clip, so shot lengths (and AI-video clip lengths)
+  are snapped: `length - 0.5 s crossfade` = whole beat units (1 beat for slow music, 2 beats for >= 100 bpm). Every
+  cut lands on a beat; music starts on beat 1 at frame 0. Never re-timed once AI clips exist.
+- Music and ambience are separate audio tracks, both ducked under the narration (editor's sidechain).
+- E2E (Docker + local AI): English rooftop-dance brief -> READY in ~80 s, Dance Pulse + city ambience picked
+  automatically, clips 5.5/5.5/5.5 s (cuts at 0, 5, 10 s = on the beat), render 15.5 s 1080×1920 in ~5 s;
+  Whisper on the final MP4 heard all 3 VO lines exactly over the music.
+- Tests: +7 (matching, beat unit, snap math, every start on a beat, choice rules, every track renders with real ffmpeg at
+  the exact length without clipping, produced scene with music + ambience + retry reuse + `none`). 286 pass,
+  stmts 93.2%, branches 83.2%.
+- Limits: synthesised music is simple (good bed, not a hit song). No vocals. Real songs = user uploads them as SOUND.
