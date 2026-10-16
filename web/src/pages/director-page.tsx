@@ -13,6 +13,7 @@ import { useMe } from '@/features/auth/use-auth';
 import { openDraftInEditor } from '@/features/editor/edit-state';
 import { uploadFile } from '@/features/editor/use-editor';
 import { detectLanguage } from '@/features/director/detect-language';
+import { fillTemplate, SCENE_TEMPLATES, type SceneTemplate } from '@/features/director/templates';
 
 import {
   useCreateScene,
@@ -124,6 +125,8 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
   const [motionWanted, setMotion] = useState<'still' | 'hero' | 'ai'>('still');
   const [voice, setVoice] = useState('');
   const [music, setMusic] = useState('auto');
+  const [template, setTemplate] = useState<SceneTemplate | null>(null);
+  const [star, setStar] = useState('');
   const [caret, setCaret] = useState(0);
 
   // Auto: the language the brief asks for ("English voice-over"), else the one it's written in.
@@ -143,7 +146,7 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
     return m ? { q: m[1]!.toLowerCase(), start: caret - m[0].length } : null;
   }, [prompt, caret]);
   const suggestions = token ? library.filter((i) => i.kind !== 'VOICE' && i.handle.startsWith(token.q)).slice(0, 6) : [];
-  const mentioned = [...prompt.matchAll(/@([a-z0-9_]{2,32})/gi)].map((m) => m[1]!.toLowerCase());
+  const mentioned = [...new Set([...prompt.matchAll(/@([a-z0-9_]{2,32})/gi)].map((m) => m[1]!.toLowerCase()))];
   const unknown = mentioned.filter((h) => !library.some((i) => i.handle === h));
 
   function insert(handle: string) {
@@ -156,6 +159,19 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
       ref.current?.setSelectionRange(pos, pos);
       setCaret(pos);
     });
+  }
+
+  const characters = library.filter((i) => i.kind === 'CHARACTER');
+  function applyTemplate(t: SceneTemplate, who = star) {
+    setTemplate(t);
+    setPrompt(fillTemplate(t, who || undefined));
+    setFormat(t.format);
+    setTargetS(t.targetS);
+    setMusic(t.music);
+    setMotion(t.motion);
+    setLanguage('auto');
+    setVoice('');
+    requestAnimationFrame(() => ref.current?.focus());
   }
 
   async function submit() {
@@ -172,6 +188,7 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
               : 'Writing the script, then painting each shot. Takes 1-3 minutes on this computer.',
       });
       setPrompt('');
+      setTemplate(null);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not start the scene');
     }
@@ -189,6 +206,43 @@ function Composer({ library, onOpenLibrary }: { library: LibraryItem[]; onOpenLi
   const offline = cfg.data && !(cfg.data.localAi.llm && cfg.data.localAi.image);
   return (
     <section aria-label="New scene" className="space-y-3 rounded-2xl bg-white/[0.02] p-4 ring-1 ring-white/[0.06]">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] text-muted-foreground">Start from a template:</span>
+        {SCENE_TEMPLATES.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            title={t.hint}
+            aria-pressed={template?.id === t.id}
+            onClick={() => applyTemplate(t)}
+            className={cn('rounded-full px-3 py-1 text-xs ring-1 transition', template?.id === t.id ? 'bg-primary/15 text-foreground ring-primary/50' : 'bg-white/[0.03] text-muted-foreground ring-white/10 hover:text-foreground')}
+          >
+            <span aria-hidden>{t.emoji}</span> {t.name}
+          </button>
+        ))}
+        {template && characters.length > 0 && (
+          <label className="ml-auto flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            Star
+            <select
+              aria-label="Template star"
+              value={star}
+              onChange={(e) => {
+                setStar(e.target.value);
+                applyTemplate(template, e.target.value);
+              }}
+              className="h-7 max-w-56 rounded-md border border-input bg-background px-1.5 text-xs text-foreground"
+            >
+              <option value="">Anyone ({template.defaultWho})</option>
+              {characters.map((c) => (
+                <option key={c.id} value={c.handle}>
+                  @{c.handle} · {c.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
+      {template && <p className="-mt-1 text-[11px] text-muted-foreground">{template.hint}. Edit the lines below as you like: “VO:” lines are spoken word for word.</p>}
       <div className="relative">
         <Textarea
           ref={ref}

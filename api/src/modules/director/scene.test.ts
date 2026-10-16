@@ -11,7 +11,7 @@ import { createStubDirector, type DirectorModel } from './director.js';
 import { beatUnitS, matchStock, snapToBeat, stockArgs, STOCK_TRACKS } from '../audio/stock-music.js';
 import { runProcess } from '../../lib/run-process.js';
 import { probeMedia } from '../editor/probe.js';
-import { alignCaptionWords, buildDraft, chooseStock, isHeroShot, sceneLength, shotLength, faceCharacterFor, imagePromptFor, pickSound, produceScene, shotStarts, type SceneScript } from './scene.js';
+import { alignCaptionWords, buildDraft, chooseStock, MODEST_NEGATIVE, MODEST_PREFIX, isHeroShot, sceneLength, shotLength, faceCharacterFor, imagePromptFor, pickSound, produceScene, shotStarts, type SceneScript } from './scene.js';
 import { failAndRefund, SCENE_COST, sceneCost, SCENE_AI_MOTION_EXTRA, SCENE_HD_EXTRA, SCENE_HERO_MOTION_EXTRA } from './scenes.routes.js';
 import { picturesFromEnv } from './index.js';
 import type { ClipRequest, PictureEngine, PictureRequest } from './local-ai.js';
@@ -36,9 +36,16 @@ describe('scene (pure)', () => {
   it('picture prompt: character first, then place, then the action and style; character seed kept', () => {
     const lib = [item('goa', 'PLACE', 'goa beach'), item('riya', 'CHARACTER', 'woman, yellow kurta', { seed: 42 }), item('look', 'STYLE', '', { promptSuffix: 'film grain', negative: 'cartoon' })];
     const p = imagePromptFor(shot({ visual: 'smiling at the sea', uses: ['goa', 'riya'] }), lib);
-    expect(p.prompt).toBe('woman, yellow kurta, goa beach, smiling at the sea, film grain');
+    expect(p.prompt).toBe(`${MODEST_PREFIX}, woman, yellow kurta, goa beach, smiling at the sea, film grain`);
     expect(p.seed).toBe(42);
     expect(p.negative).toMatch(/^cartoon, lowres/);
+    expect(p.negative).toContain(MODEST_NEGATIVE);
+    // no person in the shot -> no outfit words
+    const bag = imagePromptFor(shot({ visual: 'a leather bag on a marble table' }), lib);
+    expect(bag.prompt).toBe('a leather bag on a marble table, film grain');
+    expect(bag.negative).not.toContain('midriff');
+    // a person named only in the visual still gets them
+    expect(imagePromptFor(shot({ visual: 'a girl dancing in the rain' }), []).prompt).toMatch(/^\(modestly dressed:1\.4\)/);
     expect(imagePromptFor(shot(), []).prompt).toBe('walking, cinematic photo, highly detailed, sharp focus');
   });
 
@@ -194,7 +201,7 @@ describe('produceScene (stub engines, real DB + storage + ffmpeg)', () => {
     const script = done.script as unknown as SceneScript;
     expect(script.shots).toHaveLength(3);
     for (const sh of script.shots) expect(sh).toMatchObject({ imageUploadId: expect.any(String), voiceUploadId: expect.any(String) });
-    expect(script.shots[0]!.imagePrompt).toMatch(/^woman, yellow kurta, cinematic still of @riya walks/);
+    expect(script.shots[0]!.imagePrompt).toMatch(/^\(modestly dressed:1\.4\).*, woman, yellow kurta, cinematic still of @riya walks/);
 
     const uploads = await prisma.upload.findMany({ where: { userId: u.id } });
     expect(uploads.filter((x) => x.source === 'AI_IMAGE')).toHaveLength(3);

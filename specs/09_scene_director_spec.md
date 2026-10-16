@@ -101,3 +101,27 @@ Library (character, place, Hindi narrator) → brief with @ suggestions → **RE
   the exact length without clipping, produced scene with music + ambience + retry reuse + `none`). 286 pass,
   stmts 93.2%, branches 83.2%.
 - Limits: synthesised music is simple (good bed, not a hit song). No vocals. Real songs = user uploads them as SOUND.
+
+## Templates (16 Oct 2026)
+- `web/src/features/director/templates.ts`: Dance reel 💃 (Dance Pulse, Reel, 16 s, Hero shots), Travel vlog 🏝️
+  (Sunny Pop, ocean), Chai moment ☕ (Hinglish, Lo-fi, rain), Motivation 🔥 (Cinematic, wind, Hero shots), Product
+  showcase 🛍️ (Square, Sunny Pop). Each is a brief in the format the Director follows best (`Scene N:` + `VO:` +
+  `Sound:`) plus format / length / music / motion. `{who}` = the chosen library CHARACTER (`@handle`, so the face
+  reference + seed apply) or a generic person. Picking a template fills everything; the brief stays editable.
+- All 10 variants (5 templates × with/without a character) pass the content policy and detect the intended language
+  (EN ×4, Hinglish ×1).
+- E2E (real Chrome): Dance reel + star @meera → brief/music/format filled → READY (4 shots, all use @meera, Dance Pulse
+  + city ambience, cuts on the beat) → render 15.5 s; Whisper on the final MP4 hears all 4 VO lines exactly.
+
+## Outfits drift towards "glamour" (16 Oct 2026, measured)
+- Problem: @meera = "emerald green saree" → 3 of 4 dance shots came out as crop top / bare midriff (SD 1.5 +
+  words like dance / night / neon). At LCM cfg 1.5 the negative prompt barely acts.
+- Same seed (4242), same 3 shots, 8 variants compared: modesty words at the END = no change; negatives alone at cfg 2 =
+  little change; a WEIGHTED prefix `(modestly dressed:1.4), (full-sleeve top covering the stomach:1.3)` + cfg 2 = full
+  sleeves and fewer crop tops; describing a kurta/anarkali instead of a saree = fully covered in 3/3.
+- Shipped: the prefix + a modesty negative on every shot that shows a person (`showsPerson`: a CHARACTER in the shot, or
+  person words in the visual); objects/landscapes untouched (leather-bag shot identical in quality). Gateway cfg 1.5 → 2
+  (same 8.4 s per picture).
+- Honest result: re-run of the same Dance reel → READY in 95 s, full sleeves in 4/4, but a saree still shows the midriff
+  (that's how a saree is worn) and one shot was off-shoulder. For a fully covered look, describe a kurta / anarkali /
+  full-sleeve outfit in the character.

@@ -70,16 +70,30 @@ export function faceCharacterFor(shot: Shot, library: PublicItem[]): PublicItem 
   return library.find((i) => i.kind === 'CHARACTER' && shot.uses.includes(i.handle) && i.imageUploadId && i.settings.faceRef === true && Boolean(i.settings.faceConsent)) ?? null;
 }
 
+/**
+ * SD 1.5 (DreamShaper) drifts towards "glamour" outfits for people, especially with words like dance /
+ * night / neon: an emerald saree came out as a crop top with a bare midriff in 3 of 4 shots (16 Oct).
+ * Measured on the same seed: negatives alone don't hold at LCM cfg 1.5; a WEIGHTED prefix at the
+ * start of the prompt (+ cfg 2 in the gateway) keeps people dressed as described. Applied to every shot
+ * that shows a person; objects/landscapes are left alone.
+ */
+export const MODEST_PREFIX = '(modestly dressed:1.4), (full-sleeve top covering the stomach:1.3), fully clothed';
+export const MODEST_NEGATIVE = 'cleavage, bare midriff, navel, crop top, bra, bikini, lingerie, thigh slit, bare legs, off-shoulder, revealing clothes, sexy';
+const PERSON_RE = /\b(wom[ae]n|girls?|lady|ladies|m[ae]n|boys?|guys?|person|people|she|he|her|his|they|dancer|model|traveller|traveler|athlete|couple|bride|groom|actress|actor|kid|friends?)\b/i;
+export const showsPerson = (shot: Shot, library: PublicItem[]) =>
+  PERSON_RE.test(shot.visual) || library.some((i) => i.kind === 'CHARACTER' && shot.uses.includes(i.handle));
+
 export function imagePromptFor(shot: Shot, library: PublicItem[]): { prompt: string; negative?: string; seed?: number } {
   const used = library.filter((i) => shot.uses.includes(i.handle));
   const style = library.find((i) => i.kind === 'STYLE');
   const ids = used.filter((i) => i.description && (i.kind === 'CHARACTER' || i.kind === 'PLACE'));
   // Characters first (most important to keep), then places.
   ids.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'CHARACTER' ? -1 : 1));
-  const parts = [...ids.map((i) => i.description), shot.visual];
+  const person = showsPerson(shot, library);
+  const parts = [...(person ? [MODEST_PREFIX] : []), ...ids.map((i) => i.description), shot.visual];
   parts.push((style?.settings.promptSuffix as string | undefined) ?? 'cinematic photo, highly detailed, sharp focus');
   const ch = ids.find((i) => i.kind === 'CHARACTER' && typeof i.settings.seed === 'number');
-  const negative = [style?.settings.negative as string | undefined, 'lowres, blurry, bad anatomy, deformed hands, extra fingers, text, watermark, logo']
+  const negative = [style?.settings.negative as string | undefined, 'lowres, blurry, bad anatomy, deformed hands, extra fingers, text, watermark, logo', person ? MODEST_NEGATIVE : undefined]
     .filter(Boolean)
     .join(', ');
   return { prompt: parts.join(', ').slice(0, 1400), negative, seed: ch?.settings.seed as number | undefined };

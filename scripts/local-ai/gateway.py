@@ -154,10 +154,11 @@ def make_image(body):
         args = [
             SD_BIN, "-m", SD_MODEL,
             "--lora-model-dir", LORA_DIR,
-            # LCM-LoRA: good pictures in 4-8 steps with cfg ~1.5 (vs 25+ steps without).
+            # LCM-LoRA: good pictures in 4-8 steps (vs 25+ without). cfg 2, not 1.5: at 1.5 the negative prompt barely
+            # acts (measured 16 Oct: outfits ignored the modesty negatives); 2 keeps them, same speed and quality.
             "-p", prompt + " <lora:lcm-sd15:1>",
             "-n", negative,
-            "--sampling-method", "lcm", "--steps", str(steps), "--cfg-scale", "1.5",
+            "--sampling-method", "lcm", "--steps", str(steps), "--cfg-scale", "2",
             "-W", str(w), "-H", str(h), "-s", str(seed),
             "--vae-tiling",
             "-o", out,
