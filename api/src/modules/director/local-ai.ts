@@ -1,5 +1,6 @@
 import { ProviderError } from '../generation/providers/types.js';
 import { Agent, fetch as undiciFetch } from 'undici';
+import { parseFaces, type FaceBox } from './placement.js';
 import { AURA_VOICES, parseWhisper, type SpeechProvider, type Voice } from '../audio/speech.js';
 
 /**
@@ -112,6 +113,8 @@ export interface PictureEngine {
   picture(req: PictureRequest, signal?: AbortSignal): Promise<Picture>;
   /** Moving shot from a picture (local Wan VACE). Absent = this engine can't animate. */
   clip?(req: ClipRequest, signal?: AbortSignal): Promise<Clip>;
+  /** Face boxes in a picture (0..1), for placing titles away from faces. Absent = not available. */
+  faces?(image: Buffer, signal?: AbortSignal): Promise<FaceBox[]>;
 }
 
 /** One AI-video clip on a 4 GB GPU: ~7 min (measured 435 s for 33 frames), queued behind other GPU work. */
@@ -173,6 +176,10 @@ export function createLocalPictures(o: LocalAiOptions): PictureEngine {
       if (!(res.headers.get('content-type') ?? '').startsWith('video/mp4')) throw new Error('local AI returned no video');
       const n = (h: string, d: number) => Number(res.headers.get(h)) || d;
       return { data: Buffer.from(await res.arrayBuffer()), mimeType: 'video/mp4', width: n('x-width', req.width), height: n('x-height', req.height) };
+    },
+    async faces(image, signal) {
+      const res = await call('/faces', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: new Uint8Array(image), signal, timeoutMs: 60_000 });
+      return parseFaces(await res.json());
     },
   };
 }

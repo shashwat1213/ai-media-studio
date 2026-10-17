@@ -125,3 +125,25 @@ Library (character, place, Hindi narrator) → brief with @ suggestions → **RE
 - Honest result: re-run of the same Dance reel → READY in 95 s, full sleeves in 4/4, but a saree still shows the midriff
   (that's how a saree is worn) and one shot was off-shoulder. For a fully covered look, describe a kurta / anarkali /
   full-sleeve outfit in the character.
+
+## Titles away from faces (17 Oct 2026)
+- Problem (measured on 12 real shots): SD1.5 puts the face at 0.09-0.34 of the height, so the old fixed title spot
+  (y = 0.14) covered the face in 10 of 12 shots.
+- Gateway `POST /faces` (raw PNG/JPEG -> `[{x,y,w,h,score}]`, 0..1): OpenCV YuNet 2023mar (0.23 MB, MIT) on the CPU,
+  about 0.25 s per picture, run by `scripts/local-ai/faces.py` from its own venv (`$AMS_AI_HOME/venv-face`,
+  opencv-python-headless, about 210 MB), so the gateway stays stdlib-only. `/health` reports `faces`.
+- The worker calls it once per new picture and keeps `faces` + `picSize` on the shot (best effort: no detector or an
+  error = the old 0.14 spot, the scene never fails because of it).
+- `placement.ts` (pure): maps face boxes through the editor's `cover` crop + 15% Ken Burns zoom, then picks the first
+  title y that misses every face: 0.14, 0.09, just below the faces (max 0.6, above the captions), just above them,
+  else the least-covering one. Karaoke captions stay at 0.74 unless faces sit there in more shots than at 0.86.
+- E2E (17 Oct): 3-shot close-up scene READY in about 90 s, faces found in 3/3 shots, titles moved to y 0.45-0.47,
+  rendered frames show no title over a face.
+
+## Content policy: violence (17 Oct 2026)
+Owner decision: graphic violence refused, mild non-graphic action allowed.
+- Refused (400, nothing charged): blood/gore, killing, murder, stabbing, torture, beheading, acid attack, rape, in
+  English / Hinglish / Hindi. Self-harm / suicide refused with a helpline pointer (Tele-MANAS 14416).
+- Allowed: a slap, an argument, a chase, a boxing match, a stylised fight between adults.
+- Any violence towards a child (even a slap) is refused with the flat "not allowed" message.
+- Everyday phrases stay allowed ("killing it on the dance floor", "blood orange", "dance to the beat", "hit song").

@@ -90,7 +90,18 @@ describe('scene (pure)', () => {
       { uploadId: 'a', durationS: 5.6, fit: 'cover', motion: 'zoom-in' },
       { uploadId: 'b', durationS: 4, fit: 'cover', motion: 'none' },
     ]);
-    expect(d.texts).toEqual([expect.objectContaining({ text: 'Hi', startS: 0.3, endS: 5.2 })]);
+    expect(d.texts).toEqual([expect.objectContaining({ text: 'Hi', startS: 0.3, endS: 5.2, y: 0.14 })]);
+  });
+
+  it('draft: a title moves off a face found in its picture', () => {
+    const face = { x: 0.45, y: 0.1, w: 0.24, h: 0.22 };
+    const script: SceneScript = {
+      title: 'T', mood: 'calm', language: 'en', format: '9:16',
+      shots: [shot({ imageUploadId: 'a', onScreen: 'Rain dance', faces: [face], picSize: { w: 512, h: 768 } }), shot({ imageUploadId: 'b', onScreen: 'No face', faces: [] })],
+    };
+    const [t1, t2] = buildDraft(script).texts as { y: number }[];
+    expect(t1!.y).toBeGreaterThan(0.3);
+    expect(t2!.y).toBe(0.14);
   });
 });
 
@@ -221,6 +232,29 @@ describe('produceScene (stub engines, real DB + storage + ffmpeg)', () => {
     expect(spec.format).toBe('9:16');
 
     expect(await produceScene(s.id, deps())).toBe('skipped'); // already READY
+  }, 60_000);
+
+  it('faces found in each picture are kept on the shot and move its title; a failing detector is skipped', async () => {
+    const u = await userWithLibrary();
+    const face = { x: 0.45, y: 0.08, w: 0.24, h: 0.22, score: 0.94 };
+    const seen: number[] = [];
+    const withFaces: PictureEngine = { ...stubPictures, name: 'faces', faces: async (img) => (seen.push(img.length), [face]) };
+    const s1 = await prisma.scene.create({ data: { userId: u.id, prompt: '@riya walks. She smiles. Sunset.', language: 'en', format: '9:16', targetS: 12, voice: 'narrator' } });
+    expect(await produceScene(s1.id, deps(createStubDirector(), withFaces))).toBe('ready');
+    const d1 = await prisma.scene.findUniqueOrThrow({ where: { id: s1.id } });
+    const sc = d1.script as unknown as SceneScript;
+    expect(seen).toHaveLength(sc.shots.length);
+    expect(sc.shots[0]).toMatchObject({ faces: [face], picSize: { w: 512, h: 768 } });
+    const texts = (d1.draft as { texts: { y: number }[] }).texts;
+    expect(texts.length).toBeGreaterThan(0);
+    for (const t of texts) expect(t.y).toBeGreaterThan(0.3);
+
+    const broken: PictureEngine = { ...stubPictures, name: 'broken', faces: async () => { throw new Error('detector down'); } };
+    const s2 = await prisma.scene.create({ data: { userId: u.id, prompt: '@riya walks. Sunset.', language: 'en', format: '9:16', targetS: 8, voice: 'narrator' } });
+    expect(await produceScene(s2.id, deps(createStubDirector(), broken))).toBe('ready');
+    const d2 = await prisma.scene.findUniqueOrThrow({ where: { id: s2.id } });
+    expect((d2.script as unknown as SceneScript).shots[0]!.faces).toBeUndefined();
+    for (const t of (d2.draft as { texts: { y: number }[] }).texts) expect(t.y).toBe(0.14);
   }, 60_000);
 
   it('HD scene: every picture is requested upscaled and stored at its REAL (HD) size; the draft still validates', async () => {

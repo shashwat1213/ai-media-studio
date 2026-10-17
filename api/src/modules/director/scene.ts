@@ -13,6 +13,7 @@ import { ProviderError } from '../generation/providers/types.js';
 import { beatUnitS, matchStock, snapToBeat, stockArgs, stockTrack, type StockTrack } from '../audio/stock-music.js';
 import { direct, spokenLanguage, type DirectorModel, type SceneLanguage, type Script, type Shot } from './director.js';
 import type { PictureEngine } from './local-ai.js';
+import { placeCaptions, placeTitle, type FaceBox, type SceneFormat } from './placement.js';
 
 /**
  * Scene production (runs in the worker): script -> for each shot a picture and a narration clip,
@@ -35,6 +36,9 @@ export interface SceneShot extends Shot {
   seed?: number;
   /** The full prompt sent to the picture model (shown in the storyboard). */
   imagePrompt?: string;
+  /** Faces found in the picture (0..1) + its size; on-screen titles are placed away from them. */
+  faces?: FaceBox[];
+  picSize?: { w: number; h: number };
   error?: string;
 }
 
@@ -206,7 +210,9 @@ export function buildDraft(script: SceneScript) {
     );
     if (s.onScreen) {
       const st = starts[i]!;
-      texts.push({ text: s.onScreen, startS: Math.round((st + 0.3) * 100) / 100, endS: Math.round((st + len - 0.4) * 100) / 100, x: 0.5, y: 0.14, size: 'l', color: '#ffffff', style: 'box', anim: 'slide' });
+      // Away from the faces in this shot's picture (0.14 when none were found, as before).
+      const y = placeTitle(s.faces, s.onScreen, script.format as SceneFormat, s.picSize ?? SCENE_FORMAT_PX[script.format]);
+      texts.push({ text: s.onScreen, startS: Math.round((st + 0.3) * 100) / 100, endS: Math.round((st + len - 0.4) * 100) / 100, x: 0.5, y, size: 'l', color: '#ffffff', style: 'box', anim: 'slide' });
     }
   });
   return { title: script.title, format: script.format, transition: 'fade', background: '#000000', clips, texts, boxes: [] as unknown[] };
@@ -295,6 +301,18 @@ async function narrationTrack(deps: ProduceDeps, dir: string, script: SceneScrip
   return out;
 }
 
+/** Face boxes for title placement. Best effort: no detector / an error -> undefined (default spot). */
+async function findFaces(deps: ProduceDeps, image: Buffer, log: Logger, signal?: AbortSignal): Promise<FaceBox[] | undefined> {
+  if (!deps.pictures.faces) return undefined;
+  try {
+    return await deps.pictures.faces(image, signal);
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    log.warn({ err: (err as Error).message }, 'face detection skipped');
+    return undefined;
+  }
+}
+
 /** Plan (LLM) + produce (pictures, voice, sound) + draft. Updates the Scene row as it goes. */
 /** The scene was stopped (FAILED) while it was being made. */
 class SceneStopped extends Error {}
@@ -369,6 +387,8 @@ export async function produceScene(sceneId: string, deps: ProduceDeps, signal?: 
         s.imageUploadId = up.id;
         s.imagePrompt = ip.prompt;
         s.seed = pic.seed ?? undefined;
+        s.picSize = { w: pic.width, h: pic.height };
+        s.faces = await findFaces(deps, pic.data, log, signal);
       }
       if (s.narration && !s.voiceUploadId) {
         await progress(`Voice ${i + 1} of ${n}…`);
@@ -442,7 +462,8 @@ export async function produceScene(sceneId: string, deps: ProduceDeps, signal?: 
         const words = alignCaptionWords(lines, tr.words);
         const transcript = { language: tr.language, text: lines.map((l) => l.text).join(' '), words, durationS: tr.durationS };
         await prisma.upload.update({ where: { id: up.id }, data: { transcriptStatus: 'DONE', transcript: transcript as unknown as Prisma.InputJsonValue, transcriptCost: 0 } });
-        if (words.length) autoCaptions = { uploadId: up.id, y: 0.74, size: 'l', color: '#ffffff', highlight: '#facc15', style: 'outline', maxWords: lang === 'hinglish' || lang === 'en' ? 4 : 3 };
+        const capY = placeCaptions(script.shots.filter((s) => s.imageUploadId).map((s) => s.faces), script.format as SceneFormat, script.shots.find((s) => s.picSize)?.picSize ?? SCENE_FORMAT_PX[script.format]);
+        if (words.length) autoCaptions = { uploadId: up.id, y: capY, size: 'l', color: '#ffffff', highlight: '#facc15', style: 'outline', maxWords: lang === 'hinglish' || lang === 'en' ? 4 : 3 };
       } catch (err) {
         log.warn({ err: (err as Error).message }, 'scene captions skipped');
       }

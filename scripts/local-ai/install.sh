@@ -59,6 +59,12 @@ mkdir -p "$ROOT/models/whisper"
 dl "$HF/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin" "$ROOT/models/whisper/large-v3-turbo-q5_0.bin"
 dl "$HF/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf" "$ROOT/models/llm/gemma3-4b-it-q4km.gguf"
 dl "$HF/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf" "$ROOT/models/llm/qwen3-4b-instruct-q4km.gguf"
+# Titles away from faces: OpenCV YuNet face detector (MIT, 0.23 MB) + its own venv (opencv-python-headless, ~210 MB).
+mkdir -p "$ROOT/models/face"
+dl "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx" "$ROOT/models/face/face_detection_yunet_2023mar.onnx"
+if [ ! -x "$ROOT/venv-face/bin/python" ]; then
+  uv venv "$ROOT/venv-face" --python 3.12 -q && uv pip install -q --python "$ROOT/venv-face/bin/python" opencv-python-headless numpy
+fi
 
 rm -rf "$ROOT/tmp"
 echo "DONE"; du -sh "$ROOT"/bin "$ROOT"/models/*

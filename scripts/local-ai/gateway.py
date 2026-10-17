@@ -8,6 +8,8 @@ Local AI gateway for AI Media Studio (standard library only, no pip installs).
     POST /video       {"prompt", "ref": base64 PNG/JPEG (the shot's picture), "width", "height", "frames"?: 17..49,
                        "steps"?: 4..10, "seconds"?: 1..12, "seed"?}                              -> video/mp4
                        Wan 2.1 VACE 1.3B: the picture's character MOVES (~7 min per 2 s clip on 4 GB).
+    POST /faces       raw PNG/JPEG bytes (<= 8 MB)                                   -> JSON [{"x","y","w","h","score"}] (0..1)
+                      OpenCV YuNet on the CPU (~0.25 s), so titles can be placed away from faces.
     POST /tts         {"text", "voice", "speed"?}                                   -> audio/wav
     POST /transcribe  raw audio bytes (any format ffmpeg reads), ?language=hi         -> JSON words
     GET  /health      -> {"ok": true, "voices": [...], "image": bool, "upscale": bool, "stt": bool}
@@ -80,6 +82,11 @@ def video_ready():
     return all(os.path.isfile(p) for p in (WAN_VACE, WAN_VAE, WAN_TE, WAN_LORA))
 # The face adapter pulls outfits towards "glamour" (measured); keep characters dressed as described.
 MODEST_NEGATIVE = "nsfw, nude, cleavage, off-shoulder, bare shoulders, thigh slit, bare legs, revealing clothes, lingerie, sexy"
+# Face boxes (title placement): OpenCV YuNet 2023mar (0.23 MB, MIT) run by faces.py in its own venv
+# (opencv-python-headless), so this gateway stays stdlib-only.
+FACE_PY = os.path.join(ROOT, "venv-face/bin/python")
+FACE_MODEL = os.path.join(ROOT, "models/face/face_detection_yunet_2023mar.onnx")
+FACE_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "faces.py")
 UPSCALE_LONG_SIDE = 1920  # final size: enough for a 1080x1920 reel, no wasted bytes
 PIPER_BIN = os.path.join(ROOT, "bin/piper/piper")
 PIPER_DIR = os.path.join(ROOT, "models/piper")
@@ -247,6 +254,26 @@ def make_video(body):
             return f.read(), {"seed": seed, "width": w, "height": h, "ms": ms}
 
 
+def faces_ready():
+    return all(os.path.isfile(p) for p in (FACE_PY, FACE_MODEL, FACE_SCRIPT))
+
+
+def find_faces(data):
+    if not faces_ready():
+        raise ValueError("face detection not installed (run scripts/local-ai/install.sh)")
+    if len(data) > MAX_FACE_REF * 2 or not (data[:8] == b"\x89PNG\r\n\x1a\n" or data[:3] == b"\xff\xd8\xff"):
+        raise ValueError("image must be a PNG or JPEG up to 8 MB")
+    with tempfile.TemporaryDirectory() as d:
+        src = os.path.join(d, "in.png" if data[:4] == b"\x89PNG" else "in.jpg")
+        with open(src, "wb") as f:
+            f.write(data)
+        p = subprocess.run([FACE_PY, FACE_SCRIPT, FACE_MODEL, src], capture_output=True, timeout=60)
+        if p.returncode != 0:
+            raise RuntimeError((p.stderr or b"").decode(errors="replace")[-300:])
+        boxes = json.loads(p.stdout.decode().strip().splitlines()[-1])
+    return boxes if isinstance(boxes, list) else []
+
+
 def make_tts(body):
     text = str(body.get("text", ""))[:3000].strip()
     voice = str(body.get("voice", ""))
@@ -333,6 +360,7 @@ class Handler(BaseHTTPRequestHandler):
                              "upscale": os.path.isfile(ESRGAN_MODEL),
                              "faceRef": os.path.isfile(IPA_MODEL) and os.path.isfile(IPA_CLIP),
                              "video": video_ready(),
+                             "faces": faces_ready(),
                              "stt": bool(find_whisper()) and os.path.isfile(WHISPER_MODEL)})
         else:
             self._send(404, {"error": "not found"})
@@ -350,6 +378,8 @@ class Handler(BaseHTTPRequestHandler):
                 mp4, meta = make_video(json.loads(self._body()))
                 self._send(200, body=mp4, ctype="video/mp4", headers={"X-Seed": str(meta["seed"]), "X-Render-Ms": str(meta["ms"]),
                                                                        "X-Width": str(meta["width"]), "X-Height": str(meta["height"])})
+            elif url.path == "/faces":
+                self._send(200, find_faces(self._body()))
             elif url.path == "/tts":
                 self._send(200, body=make_tts(json.loads(self._body())), ctype="audio/wav")
             elif url.path == "/transcribe":
