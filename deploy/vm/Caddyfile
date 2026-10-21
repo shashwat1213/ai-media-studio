@@ -1,0 +1,24 @@
+# Caddy: the only public entry point. Gets and renews a Let's Encrypt certificate automatically.
+# SITE_ADDRESS = the domain (e.g. 140.238.1.2.sslip.io, a free hostname that resolves to that IP).
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	# Presigned S3 links (path-style): https://<domain>/<bucket>/<key>?X-Amz-...
+	# MinIO checks the signature against the Host header, which Caddy passes through unchanged.
+	handle /{$S3_BUCKET}/* {
+		reverse_proxy minio:9000
+	}
+	handle /{$S3_BUCKET} {
+		reverse_proxy minio:9000
+	}
+
+	# Everything else: the SPA + /api (nginx in the web container proxies /api to the api).
+	handle {
+		reverse_proxy web:8080
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+}

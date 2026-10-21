@@ -2,12 +2,21 @@ import type { SharedEnv } from '../../config/env.js';
 import { createStubClipBytes, createStubImageBytes } from './stub-picture.js';
 import { createLocalDirector, createStubDirector, type DirectorModel } from './director.js';
 import { createLocalPictures, hdSize, type PictureEngine } from './local-ai.js';
+import { createCloudflareDirector, createCloudflarePictures } from './cloud-ai.js';
+
+/** Cloud Scene Director (no GPU): only when asked for AND the local AI is not configured. */
+function cloudOpts(env: SharedEnv) {
+  if (env.DIRECTOR_PROVIDER !== 'cloudflare' || !env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) return null;
+  return { accountId: env.CLOUDFLARE_ACCOUNT_ID, apiToken: env.CLOUDFLARE_API_TOKEN, timeoutMs: env.PROVIDER_TIMEOUT_MS };
+}
 
 export function directorFromEnv(env: SharedEnv): DirectorModel {
   if (env.LOCAL_LLM_URL && env.LOCAL_AI_TOKEN) {
     const d = createLocalDirector({ baseUrl: env.LOCAL_LLM_URL, apiKey: env.LOCAL_AI_TOKEN });
     return d;
   }
+  const cf = cloudOpts(env);
+  if (cf) return createCloudflareDirector(cf);
   return createStubDirector();
 }
 
@@ -18,6 +27,8 @@ export function scribeFromEnv(env: SharedEnv): DirectorModel | undefined {
 
 export function picturesFromEnv(env: SharedEnv): PictureEngine {
   if (env.LOCAL_AI_URL && env.LOCAL_AI_TOKEN) return createLocalPictures({ baseUrl: env.LOCAL_AI_URL, token: env.LOCAL_AI_TOKEN });
+  const cf = cloudOpts(env);
+  if (cf) return createCloudflarePictures(cf);
   return {
     name: 'stub',
     picture: async (req) => {
@@ -44,6 +55,8 @@ export interface LocalAiStatus {
 
 /** Is the local AI up? (cheap health checks; used by the UI to explain why scenes can't run). */
 export async function localAiStatus(env: SharedEnv): Promise<LocalAiStatus> {
+  // Cloud mode: shot list + pictures work; HD / same face / AI video need the local GPU.
+  if (!env.LOCAL_AI_TOKEN && cloudOpts(env)) return { llm: true, image: true, upscale: false, faceRef: false, video: false };
   if (!env.LOCAL_AI_TOKEN) return { llm: false, image: false, upscale: false, faceRef: false, video: false };
   const health = async (url?: string): Promise<Record<string, unknown> | null> => {
     if (!url) return null;
