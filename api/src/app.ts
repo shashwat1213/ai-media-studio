@@ -7,6 +7,7 @@ import type { Logger } from 'pino';
 import type { AppConfig } from './config/app-config.js';
 import type { Storage } from './lib/storage.js';
 import { healthRouter } from './routes/health.js';
+import { cronRouter } from './routes/cron.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { requireJson } from './middleware/require-json.js';
 import { createAuthService } from './modules/auth/auth.service.js';
@@ -76,6 +77,7 @@ export function createApp({ prisma, config, logger, metrics, queue, storage, red
   const creditService = createCreditService(prisma, m);
 
   app.use(healthRouter(prisma, redisPing));
+  app.use(cronRouter(prisma, { secret: config.cronSecret, bcryptCost: config.bcryptCost, demo: config.demo }));
   app.use(metricsRouter(m, config.metricsToken));
   app.use(authRouter(authService, config));
   app.use(creditsRouter(creditService, config.jwtSecret));

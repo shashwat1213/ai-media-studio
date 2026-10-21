@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import type { PrismaClient, Upload } from '@prisma/client';
 import { HttpError, notFound, tooManyRequests } from '../../lib/errors.js';
 import type { Storage } from '../../lib/storage.js';
@@ -72,9 +75,20 @@ export function createUploadService({ prisma, storage, probe, maxUploadsPerUser 
     };
   }
 
+  /**
+   * Probe a LOCAL copy, not the storage URL: ffprobe then never touches the network (smaller attack
+   * surface, and static ffmpeg builds crash resolving hostnames). The size was already checked.
+   */
   async function runProbe(key: string, declared: UploadMime): Promise<ProbeResult> {
-    const url = await storage.internalUrl(key);
-    return (probe ?? probeMedia)(url, declared);
+    if (probe) return probe(await storage.internalUrl(key), declared);
+    const dir = await mkdtemp(path.join(tmpdir(), 'probe-'));
+    try {
+      const file = path.join(dir, 'upload');
+      await storage.download(key, file);
+      return await probeMedia(file, declared);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   }
 
   return {

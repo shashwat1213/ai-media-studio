@@ -141,8 +141,10 @@ export function buildEditArgs(spec: EditSpec, io: EditInputs): string[] {
       `tpad=stop_mode=clone:stop_duration=${r3(c.lengthS)}`,
       `trim=duration=${r3(c.lengthS)}`,
       'setpts=PTS-STARTPTS',
-      // xfade needs identical timebases on both inputs.
+      // xfade needs identical timebases on both inputs...
       'settb=AVTB',
+      // ...and (ffmpeg 7) a declared constant frame rate: settb drops it, so set it again.
+      `fps=${EDIT_FPS}`,
     );
     chains.push(`[${i}:v]${parts.join(',')}[c${i}]`);
   });

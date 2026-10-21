@@ -2,7 +2,7 @@ import { loadEnv } from './config/env.js';
 import { toAppConfig } from './config/app-config.js';
 import { prisma } from './lib/prisma.js';
 import { createRedis, pingRedis } from './lib/redis.js';
-import { createStorage, storageConfigFromEnv } from './lib/storage.js';
+import { storageFromEnv } from './lib/storage.js';
 import { createApp } from './app.js';
 import { createJobQueue } from './modules/generation/queue.js';
 import { createLogger } from './observability/logger.js';
@@ -14,7 +14,7 @@ const logger = createLogger(env.NODE_ENV, env.LOG_LEVEL);
 const redis = createRedis(env.REDIS_URL, 'producer');
 redis.on('error', (err) => logger.warn({ err: err.message }, 'redis connection error'));
 const queue = createJobQueue(redis, { maxAttempts: env.JOB_MAX_ATTEMPTS, backoffMs: 2_000 });
-const storage = createStorage(storageConfigFromEnv(env));
+const storage = await storageFromEnv(env);
 const config = toAppConfig(env);
 
 const speech = speechFromEnv(env);

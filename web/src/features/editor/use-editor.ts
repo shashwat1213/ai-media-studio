@@ -31,21 +31,26 @@ export const bareType = (t: string) => t.split(';')[0]!.trim().toLowerCase();
  */
 export async function uploadFile(file: Blob, fileName: string, onProgress?: (fraction: number) => void): Promise<Upload> {
   const mimeType = bareType(file.type);
-  const { upload, post } = await api<{ upload: Upload; post: { url: string; fields: Record<string, string> } }>('/uploads', {
+  const { upload, post } = await api<{ upload: Upload; post: { url: string; fields: Record<string, string>; method?: 'POST' | 'PUT'; headers?: Record<string, string> } }>('/uploads', {
     method: 'POST',
     body: JSON.stringify({ fileName, mimeType, bytes: file.size }),
   });
+  // S3/MinIO: presigned POST form (file LAST). Vercel Blob: presigned PUT with the raw file.
+  const isPut = post.method === 'PUT';
   const form = new FormData();
-  for (const [k, v] of Object.entries(post.fields)) form.append(k, v);
-  form.append('file', file); // must be the LAST field for S3
+  if (!isPut) {
+    for (const [k, v] of Object.entries(post.fields)) form.append(k, v);
+    form.append('file', file); // must be the LAST field for S3
+  }
 
   await new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', post.url);
+    xhr.open(isPut ? 'PUT' : 'POST', post.url);
+    for (const [k, v] of Object.entries(post.headers ?? {})) xhr.setRequestHeader(k, v);
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
     xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new ApiError(xhr.status, 'Upload was rejected by storage')));
     xhr.onerror = () => reject(new ApiError(0, 'Upload failed: network error'));
-    xhr.send(form);
+    xhr.send(isPut ? file : form);
   });
   onProgress?.(1);
   const { upload: ready } = await api<{ upload: Upload }>(`/uploads/${upload.id}/complete`, { method: 'POST' });

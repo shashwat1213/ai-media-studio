@@ -97,7 +97,7 @@ const PROTOCOLS = ['-protocol_whitelist', 'file,http,https,tcp,tls'];
  * ffprobe open other files or URLs (playlist / concat tricks).
  */
 export async function probeMedia(input: string, declared: UploadMime, opts: { ffprobePath?: string; timeoutMs?: number } = {}): Promise<ProbeResult> {
-  const bin = opts.ffprobePath ?? 'ffprobe';
+  const bin = opts.ffprobePath ?? process.env.FFPROBE_PATH ?? 'ffprobe';
   const { stdout } = await runProcess(
     bin,
     ['-v', 'error', ...PROTOCOLS, '-show_entries', 'stream=codec_type,codec_name,width,height,duration:format=duration,format_name', '-of', 'json', input],

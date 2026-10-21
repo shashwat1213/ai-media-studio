@@ -41,53 +41,92 @@ export interface GenerationWorkerDeps {
   sweepIntervalMs?: number;
 }
 
+/** One queue job as the handler sees it (BullMQ job or an in-process run). */
+export interface QueueJob {
+  name: string;
+  data: GenerationJobData;
+  /** Finished attempts before this one. */
+  attemptsMade: number;
+  /** Total attempts allowed for this job. */
+  attempts: number;
+}
+
+export type JobHandlerDeps = Omit<GenerationWorkerDeps, 'connection' | 'concurrency' | 'sweepIntervalMs'>;
+
+/**
+ * What to do with one job. Shared by the BullMQ worker (Docker / VM) and the in-process queue
+ * (serverless, see inline-queue.ts). Throws to ask for a retry.
+ */
+export function createJobHandler(deps: JobHandlerDeps) {
+  const { prisma, provider, motion, editor, storage, logger, metrics } = deps;
+  return async (job: QueueJob, signal?: AbortSignal): Promise<string> => {
+    if (job.name === 'scene' && job.data.sceneId) {
+      const sceneId = job.data.sceneId;
+      if (!deps.director || !deps.pictures || !deps.speech) {
+        await failAndRefund(prisma, sceneId, 'The Scene Director is not available.');
+        return 'failed';
+      }
+      try {
+        return await produceScene(sceneId, { prisma, storage, director: deps.director, scribe: deps.scribe, pictures: deps.pictures, speech: deps.speech, logger, ffmpegPath: deps.ffmpegPath }, signal);
+      } catch (err) {
+        // Transient (local AI down / busy): retried once; after that, refund.
+        if (job.attemptsMade + 1 >= job.attempts) {
+          await failAndRefund(prisma, sceneId, (err as { userMessage?: string }).userMessage ?? 'The scene failed. Your credits were refunded.');
+          return 'failed';
+        }
+        await prisma.scene.update({ where: { id: sceneId }, data: { status: 'PRODUCING', error: null, progress: 'Retrying…' } });
+        throw err;
+      }
+    }
+    if (job.name === 'transcribe' && job.data.uploadId) {
+      const attempt = { attempt: job.attemptsMade + 1, maxAttempts: deps.maxAttempts, signal };
+      const r = deps.speech
+        ? await processTranscription(job.data.uploadId, attempt, { prisma, storage, speech: deps.speech, logger, ffmpegPath: deps.ffmpegPath })
+        : await import('../audio/transcription.js').then((m) => m.failTranscription(prisma, job.data.uploadId!, 'Transcription is unavailable right now.')).then(() => 'failed' as const);
+      if (r === 'retry') throw new Error('transient transcription failure, retrying');
+      return r;
+    }
+    if (!job.data.jobId) return 'skipped';
+    const result = await processGenerationJob(
+      job.data.jobId,
+      { attempt: job.attemptsMade + 1, maxAttempts: deps.maxAttempts, signal },
+      { prisma, provider, motion, editor, storage, logger, metrics },
+    );
+    if (result === 'retry') throw new Error('transient provider failure, retrying');
+    return result;
+  };
+}
+
+/** Refund stuck jobs / remove abandoned uploads. Run every minute by the worker, or by a cron. */
+export function createSweeper(deps: Pick<JobHandlerDeps, 'prisma' | 'storage' | 'logger' | 'metrics' | 'jobTimeoutMinutes'>) {
+  const { prisma, storage, logger, metrics } = deps;
+  return async () => {
+    try {
+      const n = await sweepStuckJobs(prisma, deps.jobTimeoutMinutes, metrics);
+      if (n > 0) logger.warn({ refunded: n }, 'swept stuck jobs');
+      // Uploads started but never completed (tab closed mid-upload).
+      const u = await sweepStaleUploads(prisma, storage);
+      if (u > 0) logger.info({ removed: u }, 'swept stale uploads');
+      const t = await sweepStuckTranscriptions(prisma, deps.jobTimeoutMinutes);
+      if (t > 0) logger.warn({ refunded: t }, 'swept stuck transcriptions');
+    } catch (err) {
+      logger.error({ err: (err as Error).message }, 'sweeper failed');
+    }
+  };
+}
+
 /**
  * BullMQ wiring around processGenerationJob.
  * The worker is a SEPARATE process from the API (one process per container): a slow AI call
  * or a CPU-heavy image step can never make the API slow, and each scales on its own.
  */
 export function startGenerationWorker(deps: GenerationWorkerDeps) {
-  const { prisma, connection, provider, motion, editor, storage, logger, metrics } = deps;
+  const { connection, logger } = deps;
 
+  const handle = createJobHandler(deps);
   const worker = new Worker<GenerationJobData>(
     GENERATION_QUEUE,
-    async (job, _token, signal) => {
-      if (job.name === 'scene' && job.data.sceneId) {
-        const sceneId = job.data.sceneId;
-        if (!deps.director || !deps.pictures || !deps.speech) {
-          await failAndRefund(prisma, sceneId, 'The Scene Director is not available.');
-          return 'failed';
-        }
-        try {
-          return await produceScene(sceneId, { prisma, storage, director: deps.director, scribe: deps.scribe, pictures: deps.pictures, speech: deps.speech, logger, ffmpegPath: deps.ffmpegPath }, signal);
-        } catch (err) {
-          // Transient (local AI down / busy): BullMQ retries once; after that, refund.
-          if (job.attemptsMade + 1 >= (job.opts.attempts ?? 1)) {
-            await failAndRefund(prisma, sceneId, (err as { userMessage?: string }).userMessage ?? 'The scene failed. Your credits were refunded.');
-            return 'failed';
-          }
-          await prisma.scene.update({ where: { id: sceneId }, data: { status: 'PRODUCING', error: null, progress: 'Retrying…' } });
-          throw err;
-        }
-      }
-      if (job.name === 'transcribe' && job.data.uploadId) {
-        const attempt = { attempt: job.attemptsMade + 1, maxAttempts: deps.maxAttempts, signal };
-        const r = deps.speech
-          ? await processTranscription(job.data.uploadId, attempt, { prisma, storage, speech: deps.speech, logger, ffmpegPath: deps.ffmpegPath })
-          : await import('../audio/transcription.js').then((m) => m.failTranscription(prisma, job.data.uploadId!, 'Transcription is unavailable right now.')).then(() => 'failed' as const);
-        if (r === 'retry') throw new Error('transient transcription failure, retrying');
-        return r;
-      }
-      if (!job.data.jobId) return 'skipped';
-      const result = await processGenerationJob(
-        job.data.jobId,
-        // attemptsMade = finished attempts before this one.
-        { attempt: job.attemptsMade + 1, maxAttempts: deps.maxAttempts, signal },
-        { prisma, provider, motion, editor, storage, logger, metrics },
-      );
-      if (result === 'retry') throw new Error('transient provider failure, retrying');
-      return result;
-    },
+    (job, _token, signal) => handle({ name: job.name, data: job.data, attemptsMade: job.attemptsMade, attempts: job.opts.attempts ?? 1 }, signal),
     {
       connection,
       concurrency: deps.concurrency,
@@ -107,19 +146,7 @@ export function startGenerationWorker(deps: GenerationWorkerDeps) {
   });
   worker.on('error', (err) => logger.error({ err: err.message }, 'worker error'));
 
-  const sweep = async () => {
-    try {
-      const n = await sweepStuckJobs(prisma, deps.jobTimeoutMinutes, metrics);
-      if (n > 0) logger.warn({ refunded: n }, 'swept stuck jobs');
-      // Uploads started but never completed (tab closed mid-upload).
-      const u = await sweepStaleUploads(prisma, storage);
-      if (u > 0) logger.info({ removed: u }, 'swept stale uploads');
-      const t = await sweepStuckTranscriptions(prisma, deps.jobTimeoutMinutes);
-      if (t > 0) logger.warn({ refunded: t }, 'swept stuck transcriptions');
-    } catch (err) {
-      logger.error({ err: (err as Error).message }, 'sweeper failed');
-    }
-  };
+  const sweep = createSweeper(deps);
   const sweeper = setInterval(sweep, deps.sweepIntervalMs ?? 60_000);
   sweeper.unref();
   void sweep();

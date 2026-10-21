@@ -23,6 +23,14 @@ const SharedSchema = z.object({
   // Bearer token protecting GET /metrics. Required in production (see refine below).
   METRICS_TOKEN: z.string().min(16).optional(),
 
+  // --- Deployment shape ---
+  // 's3' = S3 / MinIO (Docker, AWS). 'vercel-blob' = a private Vercel Blob store (serverless).
+  STORAGE_DRIVER: z.enum(['s3', 'vercel-blob']).default('s3'),
+  BLOB_READ_WRITE_TOKEN: emptyAsUnset(z.string().min(10).optional()),
+  // 'bullmq' = Redis + a separate worker process. 'inline' = run jobs inside the API process
+  // in the background (serverless: no Redis, no worker).
+  QUEUE_DRIVER: z.enum(['bullmq', 'inline']).default('bullmq'),
+
   // --- Queue (Redis + BullMQ) ---
   REDIS_URL: z.string().url().default('redis://localhost:6379'),
 
@@ -62,6 +70,11 @@ const SharedSchema = z.object({
   // Scene Director engines. 'auto' = local AI when LOCAL_* is set, else offline stubs.
   // 'cloudflare' = shot list + pictures on Workers AI's free allocation (for servers with no GPU).
   DIRECTOR_PROVIDER: z.enum(['auto', 'cloudflare']).default('auto'),
+  // Public demo account (optional): a daily cron tops it up to DEMO_DAILY_CREDITS.
+  CRON_SECRET: emptyAsUnset(z.string().min(10).optional()),
+  DEMO_EMAIL: emptyAsUnset(z.string().email().optional()),
+  DEMO_PASSWORD: emptyAsUnset(z.string().min(8).optional()),
+  DEMO_DAILY_CREDITS: z.coerce.number().int().min(0).max(1000).default(100),
   PROVIDER_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
 
   // --- Jobs ---
@@ -98,11 +111,14 @@ const needsKey = (e: { AI_PROVIDER: string; OPENROUTER_API_KEY?: string }) =>
 const needsCloudflare = (e: { AI_PROVIDER: string; CLOUDFLARE_ACCOUNT_ID?: string; CLOUDFLARE_API_TOKEN?: string }) =>
   e.AI_PROVIDER !== 'cloudflare' || Boolean(e.CLOUDFLARE_ACCOUNT_ID && e.CLOUDFLARE_API_TOKEN);
 
+const needsBlobToken = (e: { STORAGE_DRIVER: string; BLOB_READ_WRITE_TOKEN?: string }) => e.STORAGE_DRIVER !== 'vercel-blob' || Boolean(e.BLOB_READ_WRITE_TOKEN);
+
 const needsCloudflareDirector = (e: { DIRECTOR_PROVIDER: string; CLOUDFLARE_ACCOUNT_ID?: string; CLOUDFLARE_API_TOKEN?: string }) =>
   e.DIRECTOR_PROVIDER !== 'cloudflare' || Boolean(e.CLOUDFLARE_ACCOUNT_ID && e.CLOUDFLARE_API_TOKEN);
 
 function finalize<T extends z.ZodTypeAny>(schema: T) {
   return schema
+    .refine(needsBlobToken, { message: 'BLOB_READ_WRITE_TOKEN is required when STORAGE_DRIVER=vercel-blob', path: ['BLOB_READ_WRITE_TOKEN'] })
     .refine(needsCloudflareDirector, {
       message: 'CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required when DIRECTOR_PROVIDER=cloudflare',
       path: ['DIRECTOR_PROVIDER'],

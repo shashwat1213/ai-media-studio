@@ -16,6 +16,8 @@ export interface AppConfig {
   providerMode: ProviderMode;
   maxActiveJobsPerUser: number;
   generateRateLimit: number;
+  cronSecret?: string;
+  demo?: { email: string; password: string; dailyCredits: number };
 }
 
 export function toAppConfig(env: Env): AppConfig {
@@ -31,5 +33,7 @@ export function toAppConfig(env: Env): AppConfig {
     providerMode: providerMode(env),
     maxActiveJobsPerUser: env.MAX_ACTIVE_JOBS_PER_USER,
     generateRateLimit: env.GENERATE_RATE_LIMIT,
+    cronSecret: env.CRON_SECRET,
+    demo: env.DEMO_EMAIL && env.DEMO_PASSWORD ? { email: env.DEMO_EMAIL, password: env.DEMO_PASSWORD, dailyCredits: env.DEMO_DAILY_CREDITS } : undefined,
   };
 }

@@ -1,7 +1,7 @@
 import { loadWorkerEnv } from './config/env.js';
 import { prisma } from './lib/prisma.js';
 import { createRedis } from './lib/redis.js';
-import { createStorage, storageConfigFromEnv } from './lib/storage.js';
+import { storageFromEnv } from './lib/storage.js';
 import { startGenerationWorker, startWorkerHttp } from './modules/generation/worker.js';
 import { providerFromEnv } from './modules/generation/providers/index.js';
 import { createFfmpegRenderer } from './modules/generation/motion-renderer.js';
@@ -19,7 +19,7 @@ const env = loadWorkerEnv();
 const logger = createLogger(env.NODE_ENV, env.LOG_LEVEL).child({ proc: 'worker' });
 const metrics = createMetrics();
 const connection = createRedis(env.REDIS_URL, 'worker');
-const storage = createStorage(storageConfigFromEnv(env));
+const storage = await storageFromEnv(env);
 const provider = providerFromEnv(env);
 const motion = createFfmpegRenderer({ ffmpegPath: env.FFMPEG_PATH, timeoutMs: 120_000 });
 const editor = createEditRenderer({ ffmpegPath: env.FFMPEG_PATH, timeoutMs: 300_000 });

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { SharedEnv } from '../../config/env.js';
 import { ProviderError } from '../generation/providers/types.js';
-import { CF_DIRECTOR_MODEL, CF_PICTURE_MODEL, createCloudflareDirector, createCloudflarePictures } from './cloud-ai.js';
+import { execFileSync } from 'node:child_process';
+import { MODEST_PREFIX, MALE_PREFIX } from './scene.js';
+import { BLACK_FRAME_LUMA, CLOUD_MODEST, cloudPrompt, CF_DIRECTOR_MODEL, CF_PICTURE_MODEL, createCloudflareDirector, createCloudflarePictures, meanLuma } from './cloud-ai.js';
 import { directorFromEnv, localAiStatus, picturesFromEnv } from './index.js';
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(200)]);
@@ -17,7 +19,7 @@ function fakeFetch(respond: (url: string, body: Record<string, unknown>) => Resp
 }
 
 const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { 'content-type': 'application/json' } });
-const opts = (fetchImpl: typeof fetch) => ({ accountId: 'acc/1', apiToken: 'tok', fetchImpl });
+const opts = (fetchImpl: typeof fetch, brightness: (b: Buffer) => Promise<number> = async () => 100) => ({ accountId: 'acc/1', apiToken: 'tok', fetchImpl, brightness });
 
 describe('Cloudflare director (cloud Scene Director LLM)', () => {
   it('sends system + user in JSON mode and returns the content (OpenAI-style answer)', async () => {
@@ -65,7 +67,7 @@ describe('Cloudflare pictures (cloud Scene Director images)', () => {
     const f = fakeFetch(() => new Response(PNG, { status: 200, headers: { 'content-type': 'image/png' } }));
     const pic = await createCloudflarePictures(opts(f.impl)).picture({ prompt: 'p', negative: 'nude', width: 513, height: 3000, seed: 7 });
     expect(f.calls[0]!.url.endsWith(CF_PICTURE_MODEL)).toBe(true);
-    expect(f.calls[0]!.body).toMatchObject({ prompt: 'p', negative_prompt: 'nude', width: 512, height: 2048, seed: 7 });
+    expect(f.calls[0]!.body).toMatchObject({ prompt: 'p', negative_prompt: 'nude', width: 512, height: 2048, seed: 7, guidance: 1.5 });
     expect(pic).toMatchObject({ mimeType: 'image/png', seed: 7, width: 512, height: 2048 });
     expect(pic.data.equals(PNG)).toBe(true);
   });
@@ -79,10 +81,52 @@ describe('Cloudflare pictures (cloud Scene Director images)', () => {
     await expect(createCloudflarePictures(opts(bad.impl)).picture({ prompt: 'p', width: 512, height: 768 })).rejects.toMatchObject({ retryable: true });
   });
 
+  it('a black (filtered) picture is regenerated with another seed, at most 3 tries', async () => {
+    const f = fakeFetch(() => new Response(PNG));
+    const lumas = [5, 5, 80];
+    const pic = await createCloudflarePictures(opts(f.impl, async () => lumas.shift()!)).picture({ prompt: 'p', width: 512, height: 768, seed: 1 });
+    expect(f.calls.map((c) => c.body.seed)).toEqual([1, 7920, 23758]);
+    expect(pic.seed).toBe(23758);
+    const always = fakeFetch(() => new Response(PNG));
+    await createCloudflarePictures(opts(always.impl, async () => 0)).picture({ prompt: 'p', width: 512, height: 768 });
+    expect(always.calls).toHaveLength(3); // gives up and keeps the last one rather than failing the scene
+  });
+
+  const hasFfmpeg = (() => {
+    try {
+      execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  it.runIf(hasFfmpeg)('meanLuma tells a black frame from a dark photo', async () => {
+    const make = (c: string) => execFileSync('ffmpeg', ['-loglevel', 'error', '-f', 'lavfi', '-i', `color=${c}:s=64x96`, '-frames:v', '1', '-f', 'image2pipe', '-c:v', 'png', '-']);
+    expect(await meanLuma(make('0x050005'))).toBeLessThan(BLACK_FRAME_LUMA);
+    expect(await meanLuma(make('0x404850'))).toBeGreaterThan(BLACK_FRAME_LUMA);
+  });
+
   it('has no clip() or faces(): AI video / face boxes stay on the local GPU', () => {
     const e = createCloudflarePictures(opts(fakeFetch(() => new Response(PNG)).impl));
     expect(e.clip).toBeUndefined();
     expect(e.faces).toBeUndefined();
+  });
+});
+
+describe('cloudPrompt (local weighted prompt -> hosted model)', () => {
+  it('women / unknown person: the measured kurta wording replaces the weighted prefix; adults only', () => {
+    const r = cloudPrompt(`${MODEST_PREFIX}, a girl walking in the rain, (cinematic:1.2) photo`, 'bare midriff');
+    expect(r.prompt).toBe(`${CLOUD_MODEST}, a girl walking in the rain, cinematic photo`);
+    expect(r.negative).toBe('child, kid, teen, see-through, bare midriff');
+  });
+  it('men / no person: only the weights are stripped, negatives untouched', () => {
+    expect(cloudPrompt(`${MALE_PREFIX}, a chai seller`, 'woman')).toEqual({ prompt: 'one man, male, masculine face, a chai seller', negative: 'woman' });
+    expect(cloudPrompt('a quiet street')).toEqual({ prompt: 'a quiet street', negative: undefined });
+  });
+  it('the picture request uses the translated prompt', async () => {
+    const f = fakeFetch(() => new Response(PNG));
+    await createCloudflarePictures(opts(f.impl)).picture({ prompt: `${MODEST_PREFIX}, a dancer`, negative: 'x', width: 512, height: 768 });
+    expect(f.calls[0]!.body).toMatchObject({ prompt: `${CLOUD_MODEST}, a dancer`, negative_prompt: 'child, kid, teen, see-through, x' });
   });
 });
 

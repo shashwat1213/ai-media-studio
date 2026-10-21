@@ -34,7 +34,33 @@ export interface StorageConfig {
  * Objects are PRIVATE. The browser never gets bucket credentials; it gets a presigned
  * GET URL: a normal https link with a signature + expiry baked into the query string.
  */
-export function createStorage(cfg: StorageConfig) {
+/** A browser upload target: S3 presigned POST (form fields) or Vercel Blob presigned PUT (headers). */
+export interface UploadTarget {
+  url: string;
+  /** POST: send these as multipart form fields, file LAST. */
+  fields: Record<string, string>;
+  /** Default POST. PUT = send the raw file as the body with `headers`. */
+  method?: 'POST' | 'PUT';
+  headers?: Record<string, string>;
+}
+
+/** What the app needs from object storage. Implemented by S3/MinIO (below) and Vercel Blob (blob-storage.ts). */
+export interface Storage {
+  readonly bucket: string;
+  put(key: string, body: Buffer, contentType: string): Promise<void>;
+  get(key: string): Promise<Buffer>;
+  download(key: string, filePath: string): Promise<void>;
+  head(key: string): Promise<{ bytes: number; contentType?: string } | null>;
+  presignUpload(key: string, contentType: string, maxBytes: number, expiresSeconds?: number): Promise<UploadTarget>;
+  internalUrl(key: string, expiresIn?: number): Promise<string>;
+  remove(key: string): Promise<void>;
+  signedUrl(key: string, downloadName?: string): Promise<string>;
+  ensureBucket(): Promise<void>;
+  ping(): Promise<boolean>;
+  destroy(): void;
+}
+
+export function createStorage(cfg: StorageConfig): Storage {
   const base: S3ClientConfig = {
     region: cfg.region,
     forcePathStyle: cfg.forcePathStyle,
@@ -157,7 +183,15 @@ export function createStorage(cfg: StorageConfig) {
   };
 }
 
-export type Storage = ReturnType<typeof createStorage>;
+
+/** S3/MinIO or Vercel Blob, from env (STORAGE_DRIVER). */
+export async function storageFromEnv(env: Parameters<typeof storageConfigFromEnv>[0] & { STORAGE_DRIVER: 's3' | 'vercel-blob'; BLOB_READ_WRITE_TOKEN?: string }): Promise<Storage> {
+  if (env.STORAGE_DRIVER === 'vercel-blob') {
+    const { createBlobStorage } = await import('./blob-storage.js');
+    return createBlobStorage({ token: env.BLOB_READ_WRITE_TOKEN!, signedUrlTtlSeconds: env.SIGNED_URL_TTL_SECONDS });
+  }
+  return createStorage(storageConfigFromEnv(env));
+}
 
 export function storageConfigFromEnv(env: {
   S3_BUCKET: string;
