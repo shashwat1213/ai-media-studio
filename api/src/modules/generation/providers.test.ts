@@ -112,6 +112,18 @@ describe('config', () => {
     expect(providerFromEnv(loadWorkerEnv(base)).name).toBe('stub');
   });
 
+  it('treats empty local-AI vars (docker-compose `${VAR:-}` in CI) as unset', () => {
+    const empty = { LOCAL_AI_URL: '', LOCAL_LLM_URL: '', LOCAL_SCRIBE_URL: '', LOCAL_AI_TOKEN: '' };
+    for (const e of [loadEnv({ ...base, ...empty }), loadWorkerEnv({ ...base, ...empty })]) {
+      expect(e.LOCAL_AI_URL).toBeUndefined();
+      expect(e.LOCAL_LLM_URL).toBeUndefined();
+      expect(e.LOCAL_SCRIBE_URL).toBeUndefined();
+      expect(e.LOCAL_AI_TOKEN).toBeUndefined();
+    }
+    const set = loadEnv({ ...base, LOCAL_AI_URL: 'http://host:8082', LOCAL_AI_TOKEN: 't'.repeat(16) });
+    expect(set).toMatchObject({ LOCAL_AI_URL: 'http://host:8082', LOCAL_AI_TOKEN: 't'.repeat(16) });
+  });
+
   it('refuses to boot with AI_PROVIDER=openrouter and no key, or in production without METRICS_TOKEN', () => {
     const exits: unknown[] = [];
     const origExit = process.exit;

@@ -12,6 +12,10 @@ const bool = z
   .enum(['true', 'false', '1', '0'])
   .transform((v) => v === 'true' || v === '1');
 
+/** Treat an empty string as "not set" for an optional variable. */
+const emptyAsUnset = <T extends z.ZodTypeAny>(schema: T) =>
+  z.preprocess((v) => (v === '' ? undefined : v), schema);
+
 const SharedSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   DATABASE_URL: z.string().url(),
@@ -48,11 +52,13 @@ const SharedSchema = z.object({
   SPEECH_PROVIDER: z.enum(['auto', 'cloudflare', 'stub']).default('auto'),
   // Local AI (scripts/local-ai): LLM director on :8081, pictures/Piper/whisper gateway on :8082.
   // Unset = Scene Director uses the offline stubs (tests/CI); the editor works either way.
-  LOCAL_AI_URL: z.string().url().optional(),
-  LOCAL_LLM_URL: z.string().url().optional(),
+  // docker-compose passes `${VAR:-}` as an EMPTY string when the host has no value (e.g. CI),
+  // so "" means "not set" here, not "invalid URL".
+  LOCAL_AI_URL: emptyAsUnset(z.string().url().optional()),
+  LOCAL_LLM_URL: emptyAsUnset(z.string().url().optional()),
   /** Optional second LLM for Hinglish -> Devanagari (Gemma-3-4B on :8083). Defaults to LOCAL_LLM_URL. */
-  LOCAL_SCRIBE_URL: z.string().url().optional(),
-  LOCAL_AI_TOKEN: z.string().min(16).optional(),
+  LOCAL_SCRIBE_URL: emptyAsUnset(z.string().url().optional()),
+  LOCAL_AI_TOKEN: emptyAsUnset(z.string().min(16).optional()),
   PROVIDER_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
 
   // --- Jobs ---
