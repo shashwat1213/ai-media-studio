@@ -11,7 +11,7 @@ import { createStubDirector, type DirectorModel } from './director.js';
 import { beatUnitS, matchStock, snapToBeat, stockArgs, STOCK_TRACKS } from '../audio/stock-music.js';
 import { runProcess } from '../../lib/run-process.js';
 import { probeMedia } from '../editor/probe.js';
-import { alignCaptionWords, buildDraft, chooseStock, MODEST_NEGATIVE, MODEST_PREFIX, isHeroShot, sceneLength, shotLength, faceCharacterFor, imagePromptFor, pickSound, produceScene, shotStarts, type SceneScript } from './scene.js';
+import { alignCaptionWords, buildDraft, chooseStock, MALE_MODEST, MALE_NEGATIVE, MALE_PREFIX, MODEST_NEGATIVE, MODEST_PREFIX, shotGender, isHeroShot, sceneLength, shotLength, faceCharacterFor, imagePromptFor, pickSound, produceScene, shotStarts, type SceneScript } from './scene.js';
 import { failAndRefund, SCENE_COST, sceneCost, SCENE_AI_MOTION_EXTRA, SCENE_HD_EXTRA, SCENE_HERO_MOTION_EXTRA } from './scenes.routes.js';
 import { picturesFromEnv } from './index.js';
 import type { ClipRequest, PictureEngine, PictureRequest } from './local-ai.js';
@@ -47,6 +47,20 @@ describe('scene (pure)', () => {
     // a person named only in the visual still gets them
     expect(imagePromptFor(shot({ visual: 'a girl dancing in the rain' }), []).prompt).toMatch(/^\(modestly dressed:1\.4\)/);
     expect(imagePromptFor(shot(), []).prompt).toBe('walking, cinematic photo, highly detailed, sharp focus');
+  });
+
+  it('picture prompt: a man gets male-first words and male negatives (the women\'s modesty words turned men into women)', () => {
+    const man = imagePromptFor(shot({ visual: 'A young man in a white tunic dancing on a palace roof' }), []);
+    expect(man.prompt).toBe(`${MALE_PREFIX}, A young man in a white tunic dancing on a palace roof, ${MALE_MODEST}, cinematic photo, highly detailed, sharp focus`);
+    expect(man.negative).toContain(MALE_NEGATIVE);
+    expect(man.negative).not.toContain('cleavage');
+    // a male library character counts too; a woman (or a couple) keeps the women's wording
+    const lib = [item('arjun', 'CHARACTER', 'young Indian man, white kurta')];
+    expect(imagePromptFor(shot({ visual: 'smiling at the sea', uses: ['arjun'] }), lib).prompt).toMatch(/^\(one man:1\.3\)/);
+    expect(imagePromptFor(shot({ visual: 'a man and a woman dancing' }), []).prompt).toMatch(/^\(modestly dressed:1\.4\)/);
+    expect(shotGender('a girl dancing')).toBe('female');
+    expect(shotGender('a leather bag')).toBe('unknown');
+    expect(shotGender('Mansion at night, a boy runs')).toBe('male');
   });
 
   it('pickSound: best tag overlap with the descriptions + mood; music preferred on ties; needs a file', () => {

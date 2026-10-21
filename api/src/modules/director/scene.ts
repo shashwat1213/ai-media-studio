@@ -83,6 +83,18 @@ export function faceCharacterFor(shot: Shot, library: PublicItem[]): PublicItem 
  */
 export const MODEST_PREFIX = '(modestly dressed:1.4), (full-sleeve top covering the stomach:1.3), fully clothed';
 export const MODEST_NEGATIVE = 'cleavage, bare midriff, navel, crop top, bra, bikini, lingerie, thigh slit, bare legs, off-shoulder, revealing clothes, sexy';
+/**
+ * Men: the women's modesty words ("full-sleeve top covering the stomach", "cleavage") pull SD1.5 to a WOMAN.
+ * Measured 17 Oct on one scene, same seeds: old prompt 0/8 men (8/8 women, bare midriffs) -> this 8/8 men, clothed.
+ */
+export const MALE_PREFIX = '(one man:1.3), (male:1.2), masculine face';
+export const MALE_MODEST = '(fully clothed:1.3), shirt on';
+export const MALE_NEGATIVE = 'woman, female, girl, feminine, breasts, makeup, long eyelashes, shirtless, bare chest, bare midriff, navel, revealing clothes';
+const MALE_RE = /\b(m[ae]n|boys?|guys?|male|gentleman|husband|father|dad|groom|actor|king|prince|uncle|brother|son)\b/i;
+const FEMALE_RE = /\b(wom[ae]n|girls?|lady|ladies|female|wife|mother|mom|bride|actress|queen|princess|aunt|sister|daughter|she|her)\b/i;
+/** Who the picture is of: a man only when the shot (or its library character) names a man and no woman. Pure. */
+export const shotGender = (text: string): 'male' | 'female' | 'unknown' =>
+  MALE_RE.test(text) && !FEMALE_RE.test(text) ? 'male' : FEMALE_RE.test(text) ? 'female' : 'unknown';
 const PERSON_RE = /\b(wom[ae]n|girls?|lady|ladies|m[ae]n|boys?|guys?|person|people|she|he|her|his|they|dancer|model|traveller|traveler|athlete|couple|bride|groom|actress|actor|kid|friends?)\b/i;
 export const showsPerson = (shot: Shot, library: PublicItem[]) =>
   PERSON_RE.test(shot.visual) || library.some((i) => i.kind === 'CHARACTER' && shot.uses.includes(i.handle));
@@ -94,10 +106,13 @@ export function imagePromptFor(shot: Shot, library: PublicItem[]): { prompt: str
   // Characters first (most important to keep), then places.
   ids.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'CHARACTER' ? -1 : 1));
   const person = showsPerson(shot, library);
-  const parts = [...(person ? [MODEST_PREFIX] : []), ...ids.map((i) => i.description), shot.visual];
+  const male = person && shotGender([...ids.filter((i) => i.kind === 'CHARACTER').map((i) => i.description), shot.visual].join(' ')) === 'male';
+  const parts = male
+    ? [MALE_PREFIX, ...ids.map((i) => i.description), shot.visual, MALE_MODEST]
+    : [...(person ? [MODEST_PREFIX] : []), ...ids.map((i) => i.description), shot.visual];
   parts.push((style?.settings.promptSuffix as string | undefined) ?? 'cinematic photo, highly detailed, sharp focus');
   const ch = ids.find((i) => i.kind === 'CHARACTER' && typeof i.settings.seed === 'number');
-  const negative = [style?.settings.negative as string | undefined, 'lowres, blurry, bad anatomy, deformed hands, extra fingers, text, watermark, logo', person ? MODEST_NEGATIVE : undefined]
+  const negative = [style?.settings.negative as string | undefined, 'lowres, blurry, bad anatomy, deformed hands, extra fingers, text, watermark, logo', person ? (male ? MALE_NEGATIVE : MODEST_NEGATIVE) : undefined]
     .filter(Boolean)
     .join(', ');
   return { prompt: parts.join(', ').slice(0, 1400), negative, seed: ch?.settings.seed as number | undefined };

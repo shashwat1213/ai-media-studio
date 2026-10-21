@@ -1,12 +1,13 @@
 import type { ReactNode } from 'react';
 import { motion } from 'framer-motion';
-import { Clapperboard, ImageIcon, Scissors } from 'lucide-react';
+import { Clapperboard, ImageIcon, Scissors, SlidersHorizontal } from 'lucide-react';
 import { cn } from 'cn';
 
-export type Tool = 'image' | 'motion' | 'editor';
+export type Tool = 'image' | 'photo' | 'motion' | 'editor';
 
 export const TOOLS: { id: Tool; label: string; hint: string; icon: typeof ImageIcon }[] = [
   { id: 'image', label: 'Image', hint: 'Text to image', icon: ImageIcon },
+  { id: 'photo', label: 'Photo', hint: 'Upload and edit your photos', icon: SlidersHorizontal },
   { id: 'motion', label: 'Motion', hint: 'Image to video', icon: Clapperboard },
   { id: 'editor', label: 'Editor', hint: 'Screenshots & recordings + text -> video', icon: Scissors },
 ];

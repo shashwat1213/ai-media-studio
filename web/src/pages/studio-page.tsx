@@ -13,6 +13,7 @@ import { useModels, useMotionPresets, useRecentJobs } from '@/features/generatio
 import { StudioLayout, ToolRail, type Tool } from '@/features/studio/studio-layout';
 import { EditorCanvas, EditorSettings, useEditorTool } from '@/features/editor/editor-tool';
 import { useEditorConfig, useUploads } from '@/features/editor/use-editor';
+import { PhotoCanvas, PhotoSettings, usePhotoTool } from '@/features/photo/photo-tool';
 
 const toAsset = (j: Job): Asset | null => (j.asset ? { ...j.asset, prompt: j.prompt, model: j.model, aspectRatio: j.aspectRatio } : null);
 
@@ -23,7 +24,7 @@ const toAsset = (j: Job): Asset | null => (j.asset ? { ...j.asset, prompt: j.pro
 export function StudioPage() {
   const [params, setParams] = useSearchParams();
   const raw = params.get('tool');
-  const tool: Tool = raw === 'motion' || raw === 'editor' ? raw : 'image';
+  const tool: Tool = raw === 'motion' || raw === 'editor' || raw === 'photo' ? raw : 'image';
   const setTool = (t: Tool, extra: Record<string, string> = {}) => setParams({ tool: t, ...extra }, { replace: false });
 
   const { data: user } = useMe();
@@ -48,6 +49,7 @@ export function StudioPage() {
   const editorConfig = useEditorConfig();
   const uploads = useUploads();
   const editorTool = useEditorTool(uploads.data?.items);
+  const photoTool = usePhotoTool(uploads.data?.items, params.get('photo'), (photo) => setParams({ tool: 'photo', photo }, { replace: true }));
 
   const jobs = useRecentJobs(30, tool === 'motion' ? 'MOTION' : tool === 'editor' ? 'EDIT' : 'IMAGE');
   const [open, setOpen] = useState<Asset | null>(null);
@@ -55,7 +57,9 @@ export function StudioPage() {
   const balance = user?.credits ?? 0;
 
   const settings =
-    tool === 'editor' ? (
+    tool === 'photo' ? (
+      editorConfig.data ? <PhotoSettings tool={photoTool} config={editorConfig.data} uploadsLoading={uploads.isLoading} /> : <PanelSkeleton />
+    ) : tool === 'editor' ? (
       editorConfig.data ? (
         <EditorSettings tool={editorTool} config={editorConfig.data} uploads={uploads.data?.items ?? []} uploadsLoading={uploads.isLoading} balance={balance} />
       ) : (
@@ -83,6 +87,10 @@ export function StudioPage() {
                 <>
                   What will you <span className="text-gradient">create</span> today?
                 </>
+              ) : tool === 'photo' ? (
+                <>
+                  Make your photo <span className="text-gradient">pop</span>.
+                </>
               ) : tool === 'editor' ? (
                 <>
                   Turn screenshots into a <span className="text-gradient">walkthrough</span>.
@@ -96,7 +104,9 @@ export function StudioPage() {
             <p className="mt-1 text-sm text-muted-foreground">
               {tool === 'image'
                 ? 'Describe it. It renders in the background, so keep going.'
-                : tool === 'editor'
+                : tool === 'photo'
+                  ? 'Upload a photo, then crop, filter, adjust and add text. Save it to use in your videos.'
+                  : tool === 'editor'
                   ? 'Upload screenshots or record your screen, add captions and highlights, then render an MP4.'
                   : 'Pick an image and a camera move. Preview it live, then render an MP4.'}
             </p>
@@ -115,6 +125,8 @@ export function StudioPage() {
               )}
               {models.data?.mode === 'stub' && <DemoBanner />}
             </>
+          ) : tool === 'photo' ? (
+            editorConfig.data ? <PhotoCanvas tool={photoTool} config={editorConfig.data} /> : <Skeleton className="aspect-video w-full rounded-2xl" />
           ) : tool === 'editor' ? (
             editorConfig.data ? (
               <EditorCanvas tool={editorTool} config={editorConfig.data} uploads={uploads.data?.items ?? []} />
@@ -127,7 +139,7 @@ export function StudioPage() {
             <Skeleton className="aspect-video w-full rounded-2xl" />
           )}
 
-          <section aria-label={tool === 'image' ? 'Your images' : tool === 'editor' ? 'Your edits' : 'Your videos'} className="mt-8">
+          {tool !== 'photo' && <section aria-label={tool === 'image' ? 'Your images' : tool === 'editor' ? 'Your edits' : 'Your videos'} className="mt-8">
             <h2 className="mb-3 text-sm font-medium text-muted-foreground">{tool === 'image' ? 'Recent images' : tool === 'editor' ? 'Rendered edits' : 'Recent videos'}</h2>
             {jobs.isLoading ? (
               <div className="columns-2 gap-3 md:columns-3 xl:columns-4">
@@ -154,7 +166,7 @@ export function StudioPage() {
                 ))}
               </motion.div>
             )}
-          </section>
+          </section>}
         </motion.div>
       </AnimatePresence>
 
