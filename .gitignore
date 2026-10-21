@@ -11,3 +11,12 @@ coverage/
 .idea/
 # benchmark output is machine-specific; the rendered docs/BENCHMARKS.md is committed
 api/bench/results.json
+# Terraform working dirs (provider binaries) + local state. Same rules as on feat/aws-deploy.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+terraform.tfvars
+api/.scratch/
+__pycache__/
+*.pyc

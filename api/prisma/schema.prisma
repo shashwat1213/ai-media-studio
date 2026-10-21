@@ -23,6 +23,9 @@ model User {
   transactions CreditTransaction[]
   jobs         GenerationJob[]
   assets       Asset[]
+  uploads      Upload[]
+  library      LibraryItem[]
+  scenes       Scene[]
 }
 
 enum CreditReason {
@@ -53,6 +56,15 @@ model CreditTransaction {
 
 /// QUEUED -> PROCESSING -> DONE | FAILED. Transitions are conditional updates
 /// (UPDATE ... WHERE status IN (...)) so a late/duplicate message can't move a job backwards.
+/// IMAGE = text -> image via an AI provider. MOTION = an existing image -> short MP4 with a
+/// cinematic camera move, rendered locally by ffmpeg in the worker (free, deterministic).
+enum JobKind {
+  IMAGE
+  MOTION
+  /// Editor: the user's own screenshots / screen recordings + text overlays -> MP4 (ffmpeg).
+  EDIT
+}
+
 enum JobStatus {
   QUEUED
   PROCESSING
@@ -63,6 +75,7 @@ enum JobStatus {
 model GenerationJob {
   id             String    @id @default(uuid())
   userId         String
+  kind           JobKind   @default(IMAGE)
   prompt         String
   model          String
   aspectRatio    String
@@ -78,27 +91,190 @@ model GenerationJob {
   finishedAt     DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
+  /// MOTION only: the image being animated. SetNull: deleting the source image later must not
+  /// delete the finished video (or its history).
+  sourceAssetId  String?
+  /// MOTION only: camera preset id (see motion.ts) and clip length.
+  motionPreset   String?
+  /// MOTION: clip length. EDIT: total output length (rounded up), used for pricing.
+  durationS      Int?
+  /// EDIT only: the validated timeline (clips + text overlays + format). See editor/edit-spec.ts.
+  editSpec       Json?
   user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  asset          Asset?
+  asset          Asset?    @relation("JobOutput")
+  sourceAsset    Asset?    @relation("MotionSource", fields: [sourceAssetId], references: [id], onDelete: SetNull)
 
   @@unique([userId, idempotencyKey])
   @@index([userId, createdAt])
   @@index([status, updatedAt]) // stuck-job sweeper
+  @@index([sourceAssetId])
 }
 
 /// A generated file in S3/MinIO. The bytes live in object storage; this row is the index.
 model Asset {
-  id         String        @id @default(uuid())
+  id         String          @id @default(uuid())
   userId     String
-  jobId      String        @unique
-  storageKey String        @unique // users/<userId>/<jobId>.<ext>
+  jobId      String          @unique
+  storageKey String          @unique // users/<userId>/<jobId>.<ext>
   mimeType   String
   bytes      Int
   width      Int?
   height     Int?
-  createdAt  DateTime      @default(now())
-  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  job        GenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  /// Videos only.
+  durationMs Int?
+  createdAt  DateTime        @default(now())
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job        GenerationJob   @relation("JobOutput", fields: [jobId], references: [id], onDelete: Cascade)
+  /// Motion jobs made from this image.
+  motionJobs GenerationJob[] @relation("MotionSource")
 
   @@index([userId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Editor: user uploads (screenshots, screen recordings). Spec: specs/08_editor_spec.md
+// ---------------------------------------------------------------------------
+
+/// PENDING = upload URL handed out, file not verified yet. READY = the API checked the object
+/// in storage (size, and ffprobe says it really is an image/video) and recorded its metadata.
+enum UploadStatus {
+  PENDING
+  READY
+}
+
+/// Where an upload came from. TTS = a voice-over we generated from the user's script.
+enum UploadSource {
+  UPLOAD
+  RECORDING
+  TTS
+  /// A picture made by the Scene Director.
+  AI_IMAGE
+  /// A moving shot made by the Scene Director (Wan VACE: the shot's picture, animated).
+  AI_VIDEO
+  /// Built-in music / ambience rendered for a scene (synthesised by ffmpeg, see audio/stock-music.ts).
+  MUSIC
+}
+
+/// Speech-to-text on an upload's audio (runs in the worker; long files take a while).
+enum TranscriptStatus {
+  NONE
+  PENDING
+  DONE
+  FAILED
+}
+
+/// A file the user uploaded straight to S3 with a presigned PUT. Source material for EDIT jobs,
+/// not a gallery item (the rendered MP4 is the Asset).
+model Upload {
+  id               String           @id @default(uuid())
+  userId           String
+  status           UploadStatus     @default(PENDING)
+  storageKey       String           @unique // uploads/<userId>/<uploadId>.<ext>
+  fileName         String
+  mimeType         String
+  /// Declared by the browser at create time; checked against the real object on complete.
+  bytes            Int
+  width            Int?
+  height           Int?
+  /// Videos and audio.
+  durationMs       Int?
+  /// Videos: does the file have a sound track at all? (Screen recordings often don't.)
+  hasAudio         Boolean          @default(false)
+  source           UploadSource     @default(UPLOAD)
+  /// TTS only: what was spoken, and by which voice.
+  script           String?
+  voice            String?
+  /// Word-level transcript: { language, text, words: [{ w, s, e }] } (seconds). See audio/transcript.ts.
+  transcript       Json?
+  transcriptStatus TranscriptStatus @default(NONE)
+  transcriptError  String?
+  /// Credits reserved for the running transcription (refunded once if it fails). 0 = free (voice-overs).
+  transcriptCost   Int?
+  /// Ledger refId of that reservation (unique per attempt, so a retry after a refund can refund again).
+  transcriptRef    String?
+  /// When the current transcription was requested (the stuck-job sweeper measures from here).
+  transcriptAt     DateTime?
+  createdAt        DateTime         @default(now())
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, createdAt])
+  @@index([transcriptStatus, transcriptAt]) // stuck-transcription sweeper
+}
+
+// ------------------------------------------------------------------------------------------------
+// Scene Director: the user's LIBRARY of reusable things a prompt can mention with @handle, so the
+// same character / place / look / voice comes back the same in every scene.
+
+enum LibraryKind {
+  CHARACTER
+  PLACE
+  STYLE
+  VOICE
+  SOUND
+}
+
+/// One reusable item. `handle` is what the user types after '@' (unique per user, lower-case).
+model LibraryItem {
+  id            String      @id @default(uuid())
+  userId        String
+  kind          LibraryKind
+  /// @handle, [a-z0-9_]{2,32}. Unique per user across kinds, so '@riya' is never ambiguous.
+  handle        String
+  name          String
+  /// What it LOOKS like (characters/places/styles) or SOUNDS like (voices/sounds). Sent to the AI.
+  description   String
+  /// Kind-specific settings (validated by zod in library.ts), e.g. a VOICE's engine + voice id,
+  /// a CHARACTER's fixed seed, a SOUND's tags.
+  settings      Json        @default("{}")
+  /// Optional reference picture (an Upload of this user), shown in the library.
+  imageUploadId String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, handle])
+  @@index([userId, kind, updatedAt])
+}
+
+enum SceneStatus {
+  /// The director (LLM) is writing the shot list.
+  PLANNING
+  /// Pictures + voice are being made, shot by shot.
+  PRODUCING
+  /// Storyboard + editor draft are ready.
+  READY
+  FAILED
+}
+
+/// A Scene Director project: prompt -> shot list -> pictures + voice + sound -> an editor draft.
+model Scene {
+  id        String      @id @default(uuid())
+  userId    String
+  prompt    String
+  language  String
+  format    String
+  targetS   Int
+  /// HD pictures: each shot is upscaled x4 on the GPU (Real-ESRGAN) to a 1920px long side. Costs extra.
+  hd        Boolean     @default(false)
+  /// 'still' = pictures with camera moves; 'hero' = first + last shot animated (fast preset); 'ai' = every shot animated.
+  motion    String      @default("still")
+  /// Background music: 'auto' (picked from the brief + mood, shots cut on the beat), 'none', or a stock track id.
+  music     String      @default("auto")
+  /// Library handle of the narrator voice (or a raw voice id), chosen at creation.
+  voice     String
+  status    SceneStatus @default(PLANNING)
+  title     String?
+  /// The director's script + per-shot production state (see director/scene.ts SceneShot).
+  script    Json?
+  /// The editor draft (EditRequest) built from the shots; opened in the Editor to render.
+  draft     Json?
+  /// Short progress line for the UI ("Picture 3 of 6").
+  progress  String?
+  error     String?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status, updatedAt]) // stuck-scene sweeper
 }

@@ -3,11 +3,16 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
   PutObjectCommand,
   S3Client,
   type S3ClientConfig,
 } from '@aws-sdk/client-s3';
+import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { createWriteStream } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
+import type { Readable } from 'node:stream';
 
 export interface StorageConfig {
   bucket: string;
@@ -58,6 +63,56 @@ export function createStorage(cfg: StorageConfig) {
           CacheControl: 'private, max-age=31536000, immutable',
         }),
       );
+    },
+
+    /** Read an object fully into memory. For generated assets (a few MB), not for huge files. */
+    async get(key: string): Promise<Buffer> {
+      const res = await internal.send(new GetObjectCommand({ Bucket: cfg.bucket, Key: key }));
+      if (!res.Body) throw new Error(`empty body for ${key}`);
+      return Buffer.from(await res.Body.transformToByteArray());
+    },
+
+    /** Stream an object to a local file (large uploads: never held in memory). */
+    async download(key: string, filePath: string): Promise<void> {
+      const res = await internal.send(new GetObjectCommand({ Bucket: cfg.bucket, Key: key }));
+      if (!res.Body) throw new Error(`empty body for ${key}`);
+      await pipeline(res.Body as Readable, createWriteStream(filePath));
+    },
+
+    /** Size + type of an object as stored (null = it doesn't exist). */
+    async head(key: string): Promise<{ bytes: number; contentType?: string } | null> {
+      try {
+        const res = await internal.send(new HeadObjectCommand({ Bucket: cfg.bucket, Key: key }));
+        return { bytes: res.ContentLength ?? 0, contentType: res.ContentType };
+      } catch (err) {
+        const status = (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+        if (status === 404 || (err as Error).name === 'NotFound') return null;
+        throw err;
+      }
+    },
+
+    /**
+     * A browser upload straight to the bucket (the file never passes through our API).
+     * Presigned POST, not PUT: the signed POLICY makes S3 itself reject a file that is bigger
+     * than `maxBytes` or has a different Content-Type. A presigned PUT can't limit size.
+     */
+    async presignUpload(key: string, contentType: string, maxBytes: number, expiresSeconds = 600) {
+      const { url, fields } = await createPresignedPost(publicClient, {
+        Bucket: cfg.bucket,
+        Key: key,
+        Conditions: [
+          ['content-length-range', 1, maxBytes],
+          ['eq', '$Content-Type', contentType],
+        ],
+        Fields: { 'Content-Type': contentType },
+        Expires: expiresSeconds,
+      });
+      return { url, fields };
+    },
+
+    /** Short-lived GET URL reachable from THIS process (ffprobe reads uploads over HTTP, no download). */
+    internalUrl(key: string, expiresIn = 300): Promise<string> {
+      return getSignedUrl(internal, new GetObjectCommand({ Bucket: cfg.bucket, Key: key }), { expiresIn });
     },
 
     async remove(key: string) {

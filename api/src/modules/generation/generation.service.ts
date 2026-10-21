@@ -1,17 +1,27 @@
 import { randomUUID } from 'node:crypto';
-import { Prisma, type Asset, type GenerationJob, type JobStatus, type PrismaClient } from '@prisma/client';
+import { isDeepStrictEqual } from 'node:util';
+import { Prisma, type Asset, type GenerationJob, type JobKind, type JobStatus, type PrismaClient } from '@prisma/client';
 import { conflict, HttpError, InsufficientCreditsError, notFound, serviceUnavailable, tooManyRequests } from '../../lib/errors.js';
 import type { Storage } from '../../lib/storage.js';
 import type { Metrics } from '../../observability/metrics.js';
 import { applyDebit } from '../credits/credits.service.js';
 import { ACTIVE_STATUSES, failAndRefund } from './job-lifecycle.js';
 import { findModel } from './models.js';
+import { MOTION_MODEL_ID, findPreset, motionCost } from './motion.js';
 import type { JobQueue } from './queue.js';
+import { kindOf } from '../editor/uploads.service.js';
+import { EDIT_MODEL_ID, EditSpecError, editCost, normaliseEdit, type EditRequest, type EditSpec, type UploadInfo } from '../editor/edit-spec.js';
 
 export interface CreateJobInput {
   prompt: string;
   model: string;
   aspectRatio: string;
+}
+
+export interface CreateMotionInput {
+  sourceAssetId: string;
+  preset: string;
+  durationS: number;
 }
 
 export interface GenerationServiceDeps {
@@ -32,6 +42,8 @@ export interface PublicAsset {
   bytes: number;
   width: number | null;
   height: number | null;
+  durationMs: number | null;
+  kind: 'image' | 'video';
   createdAt: Date;
   prompt?: string;
   model?: string;
@@ -40,6 +52,7 @@ export interface PublicAsset {
 
 export interface PublicJob {
   id: string;
+  kind: JobKind;
   prompt: string;
   model: string;
   aspectRatio: string;
@@ -51,6 +64,10 @@ export interface PublicJob {
   startedAt: Date | null;
   finishedAt: Date | null;
   asset: PublicAsset | null;
+  /** MOTION only. */
+  motion: { preset: string; durationS: number; sourceAssetId: string | null } | null;
+  /** EDIT only: the normalised timeline (so the UI can reopen / duplicate an edit). */
+  edit: EditSpec | null;
 }
 
 type JobWithAsset = GenerationJob & { asset: Asset | null };
@@ -72,6 +89,8 @@ export function createGenerationService({ prisma, queue, storage, metrics, maxAc
       bytes: a.bytes,
       width: a.width,
       height: a.height,
+      durationMs: a.durationMs,
+      kind: a.mimeType.startsWith('video/') ? 'video' : 'image',
       createdAt: a.createdAt,
       ...(job ? { prompt: job.prompt, model: job.model, aspectRatio: job.aspectRatio } : {}),
     };
@@ -80,6 +99,7 @@ export function createGenerationService({ prisma, queue, storage, metrics, maxAc
   async function toPublicJob(j: JobWithAsset): Promise<PublicJob> {
     return {
       id: j.id,
+      kind: j.kind,
       prompt: j.prompt,
       model: j.model,
       aspectRatio: j.aspectRatio,
@@ -91,6 +111,11 @@ export function createGenerationService({ prisma, queue, storage, metrics, maxAc
       startedAt: j.startedAt,
       finishedAt: j.finishedAt,
       asset: j.asset ? await toPublicAsset(j.asset) : null,
+      motion:
+        j.kind === 'MOTION' && j.motionPreset && j.durationS
+          ? { preset: j.motionPreset, durationS: j.durationS, sourceAssetId: j.sourceAssetId }
+          : null,
+      edit: j.kind === 'EDIT' ? (j.editSpec as unknown as EditSpec) : null,
     };
   }
 
@@ -107,71 +132,211 @@ export function createGenerationService({ prisma, queue, storage, metrics, maxAc
     return existing;
   }
 
+  /**
+   * The money path shared by every job kind. Reserve credits + create the job in ONE
+   * transaction, then enqueue.
+   *
+   * Order inside the transaction matters:
+   *  1. applyDebit locks the user's row (atomic conditional UPDATE). Every other generate
+   *     request for this user now waits here until we commit.
+   *  2. Only THEN do we count active jobs. Because of the lock, two parallel requests can't
+   *     both see "2 active" and both start a 3rd. (Count first = check-then-act race.)
+   *  3. Create the job. Any throw rolls back the debit too: no credits lost, no orphan job.
+   */
+  async function reserveAndEnqueue(
+    userId: string,
+    credits: number,
+    idempotencyKey: string | undefined,
+    fingerprint: CreateJobInput,
+    createJob: (tx: Prisma.TransactionClient, id: string) => Promise<JobWithAsset>,
+    sameExtra: (j: GenerationJob) => boolean = () => true,
+  ): Promise<JobWithAsset | { job: PublicJob; replayed: true }> {
+    const replayIfAny = async () => {
+      if (!idempotencyKey) return null;
+      const existing = await replay(userId, idempotencyKey, fingerprint);
+      if (!existing) return null;
+      if (!sameExtra(existing)) throw conflict('Idempotency-Key was already used with a different request');
+      return { job: await toPublicJob(existing), replayed: true as const };
+    };
+    const early = await replayIfAny();
+    if (early) return early;
+
+    const jobId = randomUUID();
+    let job: JobWithAsset;
+    try {
+      job = await prisma.$transaction(async (tx) => {
+        await applyDebit(tx, userId, credits, 'GENERATION', jobId);
+        const active = await tx.generationJob.count({ where: { userId, status: { in: ACTIVE_STATUSES } } });
+        if (active >= maxActiveJobsPerUser) {
+          throw tooManyRequests(`You already have ${active} generations running. Wait for one to finish.`);
+        }
+        return createJob(tx, jobId);
+      });
+    } catch (err) {
+      if (err instanceof InsufficientCreditsError) metrics?.debitRejected.inc();
+      // Two requests with the same Idempotency-Key raced: the unique index let only one in.
+      if (idempotencyKey && err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const late = await replayIfAny();
+        if (late) return late;
+      }
+      throw err;
+    }
+    metrics?.creditsDebited.inc(credits);
+
+    // The job is committed. If Redis is down we can't run it, so undo the charge right away
+    // instead of leaving credits locked until the sweeper notices.
+    try {
+      await queue.enqueue(job.id);
+    } catch {
+      if (await failAndRefund(prisma, job.id, 'Could not queue the job. Your credits were refunded.')) {
+        metrics?.creditsRefunded.inc(credits);
+      }
+      throw serviceUnavailable('Generation queue is unavailable. Your credits were refunded, please try again.');
+    }
+    metrics?.jobsCreated.inc({ model: job.model });
+    return job;
+  }
+
+  /** Normalise without charging: "would this render?" (template build, AI director, render). */
+  async function previewEdit(userId: string, input: EditRequest): Promise<EditSpec> {
+    const ids = [
+      ...new Set([
+        ...input.clips.flatMap((c) => ('uploadId' in c ? [c.uploadId] : [])),
+        ...input.audio.map((a) => a.uploadId),
+        ...(input.autoCaptions ? [input.autoCaptions.uploadId] : []),
+      ]),
+    ];
+    const rows = ids.length ? await prisma.upload.findMany({ where: { id: { in: ids }, userId, status: 'READY' } }) : [];
+    const uploads = new Map<string, UploadInfo>(
+      rows.map((u) => [
+        u.id,
+        {
+          id: u.id,
+          kind: kindOf(u.mimeType),
+          durationMs: u.durationMs,
+          hasAudio: u.hasAudio,
+          words: u.transcriptStatus === 'DONE' ? ((u.transcript as { words?: UploadInfo['words'] } | null)?.words ?? null) : null,
+        },
+      ]),
+    );
+    try {
+      return normaliseEdit(input, uploads);
+    } catch (err) {
+      if (err instanceof EditSpecError) throw new HttpError(400, err.message);
+      throw err;
+    }
+  }
+
   return {
-    /**
-     * Reserve credits + create the job in ONE transaction, then enqueue.
-     *
-     * Order inside the transaction matters:
-     *  1. applyDebit locks the user's row (atomic conditional UPDATE). Every other generate
-     *     request for this user now waits here until we commit.
-     *  2. Only THEN do we count active jobs. Because of the lock, two parallel requests can't
-     *     both see "2 active" and both start a 3rd. (Count first = check-then-act race.)
-     *  3. Create the job. Any throw rolls back the debit too: no credits lost, no orphan job.
-     */
+    /** Text -> image. See reserveAndEnqueue for how credits + queue stay consistent. */
     async create(userId: string, input: CreateJobInput, idempotencyKey?: string) {
       const model = findModel(input.model);
       if (!model) throw new HttpError(400, 'Unknown model');
 
-      if (idempotencyKey) {
-        const existing = await replay(userId, idempotencyKey, input);
-        if (existing) return { job: await toPublicJob(existing), replayed: true };
-      }
+      const job = await reserveAndEnqueue(userId, model.credits, idempotencyKey, input, (tx, id) =>
+        tx.generationJob.create({
+          data: { id, userId, prompt: input.prompt, model: model.id, aspectRatio: input.aspectRatio, creditsCost: model.credits, idempotencyKey },
+          include: { asset: true },
+        }),
+      );
+      if ('replayed' in job) return job;
+      return { job: await toPublicJob(job), replayed: false };
+    },
 
-      const jobId = randomUUID();
-      let job: JobWithAsset;
-      try {
-        job = await prisma.$transaction(async (tx) => {
-          await applyDebit(tx, userId, model.credits, 'GENERATION', jobId);
-          const active = await tx.generationJob.count({ where: { userId, status: { in: ACTIVE_STATUSES } } });
-          if (active >= maxActiveJobsPerUser) {
-            throw tooManyRequests(`You already have ${active} generations running. Wait for one to finish.`);
-          }
-          return tx.generationJob.create({
+    /**
+     * Animate one of the user's own images. Same money/queue path as create(): credits reserved
+     * in the same transaction as the job, refunded once if anything fails.
+     */
+    async createMotion(userId: string, input: CreateMotionInput, idempotencyKey?: string) {
+      const preset = findPreset(input.preset);
+      if (!preset) throw new HttpError(400, 'Unknown motion preset');
+      // Ownership check: someone else's image looks exactly like a missing one (404).
+      const src = await prisma.asset.findFirst({
+        where: { id: input.sourceAssetId, userId },
+        include: { job: { select: { prompt: true, aspectRatio: true } } },
+      });
+      if (!src) throw notFound('Source image not found');
+      if (!src.mimeType.startsWith('image/')) throw new HttpError(400, 'Only images can be animated');
+
+      const credits = motionCost(input.durationS);
+      const prompt = src.job.prompt;
+      const fingerprint = { prompt, model: MOTION_MODEL_ID, aspectRatio: src.job.aspectRatio };
+      const job = await reserveAndEnqueue(userId, credits, idempotencyKey, fingerprint, (tx, id) =>
+        tx.generationJob.create({
+          data: {
+            id,
+            userId,
+            kind: 'MOTION',
+            prompt,
+            model: MOTION_MODEL_ID,
+            aspectRatio: src.job.aspectRatio,
+            creditsCost: credits,
+            idempotencyKey,
+            sourceAssetId: src.id,
+            motionPreset: preset.id,
+            durationS: input.durationS,
+          },
+          include: { asset: true },
+        }),
+        (j) => j.sourceAssetId === src.id && j.motionPreset === preset.id && j.durationS === input.durationS,
+      );
+      if ('replayed' in job) return job;
+      return { job: await toPublicJob(job), replayed: false };
+    },
+
+    /** Facts about the user's READY uploads, in the order asked (unknown / foreign ids -> 400). */
+    async uploadInfo(userId: string, ids: string[]) {
+      const rows = await prisma.upload.findMany({ where: { id: { in: ids }, userId, status: 'READY' } });
+      const byId = new Map(rows.map((u) => [u.id, u]));
+      return ids.map((id, i) => {
+        const u = byId.get(id);
+        if (!u) throw new HttpError(400, `File ${i + 1} not found`);
+        const kind = kindOf(u.mimeType);
+        if (kind === 'audio') throw new HttpError(400, `File ${i + 1} is audio: add it on the audio track instead`);
+        return { uploadId: u.id, kind, durationMs: u.durationMs };
+      });
+    },
+
+    /** Normalise without charging: "would this render?" (used by template build and the AI director). */
+    previewEdit,
+
+    /**
+     * Editor: the user's own uploads + captions -> one MP4. Same money/queue path as create():
+     * credits reserved in the same transaction as the job, refunded once if anything fails.
+     * The request is normalised against the REAL uploads (owned by this user, READY, real
+     * durations), and that normalised spec is what gets stored and rendered.
+     */
+    async createEdit(userId: string, input: EditRequest, idempotencyKey?: string) {
+      const spec = await previewEdit(userId, input);
+      const credits = editCost(spec.totalS);
+      const title = input.title?.trim() || `Edit · ${spec.clips.length} clip${spec.clips.length > 1 ? 's' : ''}`;
+      const fingerprint = { prompt: title, model: EDIT_MODEL_ID, aspectRatio: spec.format };
+      // Plain-JSON copy: what Postgres will hand back (JSONB doesn't keep key order, so compare deeply).
+      const specJson = JSON.parse(JSON.stringify(spec)) as unknown;
+      const job = await reserveAndEnqueue(
+        userId,
+        credits,
+        idempotencyKey,
+        fingerprint,
+        (tx, id) =>
+          tx.generationJob.create({
             data: {
-              id: jobId,
+              id,
               userId,
-              prompt: input.prompt,
-              model: model.id,
-              aspectRatio: input.aspectRatio,
-              creditsCost: model.credits,
+              kind: 'EDIT',
+              prompt: title,
+              model: EDIT_MODEL_ID,
+              aspectRatio: spec.format,
+              creditsCost: credits,
               idempotencyKey,
+              durationS: Math.ceil(spec.totalS),
+              editSpec: spec as unknown as Prisma.InputJsonValue,
             },
             include: { asset: true },
-          });
-        });
-      } catch (err) {
-        if (err instanceof InsufficientCreditsError) metrics?.debitRejected.inc();
-        // Two requests with the same Idempotency-Key raced: the unique index let only one in.
-        if (idempotencyKey && err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-          const existing = await replay(userId, idempotencyKey, input);
-          if (existing) return { job: await toPublicJob(existing), replayed: true };
-        }
-        throw err;
-      }
-      metrics?.creditsDebited.inc(model.credits);
-
-      // The job is committed. If Redis is down we can't run it, so undo the charge right away
-      // instead of leaving credits locked until the sweeper notices.
-      try {
-        await queue.enqueue(job.id);
-      } catch {
-        if (await failAndRefund(prisma, job.id, 'Could not queue the job. Your credits were refunded.')) {
-          metrics?.creditsRefunded.inc(model.credits);
-        }
-        throw serviceUnavailable('Generation queue is unavailable. Your credits were refunded, please try again.');
-      }
-
-      metrics?.jobsCreated.inc({ model: model.id });
+          }),
+        (j) => isDeepStrictEqual(j.editSpec, specJson),
+      );
+      if ('replayed' in job) return job;
       return { job: await toPublicJob(job), replayed: false };
     },
 
@@ -184,9 +349,9 @@ export function createGenerationService({ prisma, queue, storage, metrics, maxAc
     },
 
     /** Cursor pagination: stable under inserts (offset pagination would skip/duplicate rows). */
-    async listJobs(userId: string, opts: { limit: number; cursor?: string; status?: JobStatus }) {
+    async listJobs(userId: string, opts: { limit: number; cursor?: string; status?: JobStatus; kind?: JobKind }) {
       const rows = await prisma.generationJob.findMany({
-        where: { userId, ...(opts.status ? { status: opts.status } : {}) },
+        where: { userId, ...(opts.status ? { status: opts.status } : {}), ...(opts.kind ? { kind: opts.kind } : {}) },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: opts.limit + 1,
         ...(opts.cursor ? { cursor: { id: opts.cursor }, skip: 1 } : {}),
@@ -199,9 +364,9 @@ export function createGenerationService({ prisma, queue, storage, metrics, maxAc
       };
     },
 
-    async listAssets(userId: string, opts: { limit: number; cursor?: string }) {
+    async listAssets(userId: string, opts: { limit: number; cursor?: string; type?: 'image' | 'video' }) {
       const rows = await prisma.asset.findMany({
-        where: { userId },
+        where: { userId, ...(opts.type ? { mimeType: { startsWith: `${opts.type}/` } } : {}) },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: opts.limit + 1,
         ...(opts.cursor ? { cursor: { id: opts.cursor }, skip: 1 } : {}),

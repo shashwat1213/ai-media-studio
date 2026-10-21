@@ -72,6 +72,10 @@ jobs:
             pgsty/silo:RELEASE.2026-09-16T00-00-00Z server /data
           for i in $(seq 1 30); do curl -fsS http://localhost:9000/minio/health/live && exit 0; sleep 1; done
           docker logs silo; exit 1
+      # Real ffmpeg/ffprobe: Motion + Editor tests render actual MP4s and probe real uploads
+      # (without it those tests are skipped, so this is what makes them count in CI).
+      - name: Install ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg && ffmpeg -version | head -1
       - run: npm ci                 # clean, lockfile-exact install (also runs prisma generate)
       - run: npx prisma validate
       - run: npm run typecheck

@@ -8,12 +8,30 @@ import { pingRedis } from '../../lib/redis.js';
 import type { Metrics } from '../../observability/metrics.js';
 import { processGenerationJob, sweepStuckJobs } from './processor.js';
 import type { ImageProvider } from './providers/types.js';
+import type { MotionRenderer } from './motion-renderer.js';
+import type { EditRenderer } from '../editor/edit-renderer.js';
+import { sweepStaleUploads } from '../editor/uploads.service.js';
+import type { SpeechProvider } from '../audio/speech.js';
+import { processTranscription, sweepStuckTranscriptions } from '../audio/transcription.js';
+import type { DirectorModel } from '../director/director.js';
+import type { PictureEngine } from '../director/local-ai.js';
+import { produceScene } from '../director/scene.js';
+import { failAndRefund } from '../director/scenes.routes.js';
 import { GENERATION_QUEUE, type GenerationJobData } from './queue.js';
 
 export interface GenerationWorkerDeps {
   prisma: PrismaClient;
   connection: Redis;
   provider: ImageProvider;
+  motion?: MotionRenderer;
+  editor?: EditRenderer;
+  /** Speech-to-text for 'transcribe' jobs. Missing = those jobs fail + refund. */
+  speech?: SpeechProvider;
+  /** Scene Director engines. Missing = scene jobs fail + refund. */
+  director?: DirectorModel;
+  scribe?: DirectorModel;
+  pictures?: PictureEngine;
+  ffmpegPath?: string;
   storage: Storage;
   logger: Logger;
   metrics?: Metrics;
@@ -29,16 +47,43 @@ export interface GenerationWorkerDeps {
  * or a CPU-heavy image step can never make the API slow, and each scales on its own.
  */
 export function startGenerationWorker(deps: GenerationWorkerDeps) {
-  const { prisma, connection, provider, storage, logger, metrics } = deps;
+  const { prisma, connection, provider, motion, editor, storage, logger, metrics } = deps;
 
   const worker = new Worker<GenerationJobData>(
     GENERATION_QUEUE,
     async (job, _token, signal) => {
+      if (job.name === 'scene' && job.data.sceneId) {
+        const sceneId = job.data.sceneId;
+        if (!deps.director || !deps.pictures || !deps.speech) {
+          await failAndRefund(prisma, sceneId, 'The Scene Director is not available.');
+          return 'failed';
+        }
+        try {
+          return await produceScene(sceneId, { prisma, storage, director: deps.director, scribe: deps.scribe, pictures: deps.pictures, speech: deps.speech, logger, ffmpegPath: deps.ffmpegPath }, signal);
+        } catch (err) {
+          // Transient (local AI down / busy): BullMQ retries once; after that, refund.
+          if (job.attemptsMade + 1 >= (job.opts.attempts ?? 1)) {
+            await failAndRefund(prisma, sceneId, (err as { userMessage?: string }).userMessage ?? 'The scene failed. Your credits were refunded.');
+            return 'failed';
+          }
+          await prisma.scene.update({ where: { id: sceneId }, data: { status: 'PRODUCING', error: null, progress: 'Retrying…' } });
+          throw err;
+        }
+      }
+      if (job.name === 'transcribe' && job.data.uploadId) {
+        const attempt = { attempt: job.attemptsMade + 1, maxAttempts: deps.maxAttempts, signal };
+        const r = deps.speech
+          ? await processTranscription(job.data.uploadId, attempt, { prisma, storage, speech: deps.speech, logger, ffmpegPath: deps.ffmpegPath })
+          : await import('../audio/transcription.js').then((m) => m.failTranscription(prisma, job.data.uploadId!, 'Transcription is unavailable right now.')).then(() => 'failed' as const);
+        if (r === 'retry') throw new Error('transient transcription failure, retrying');
+        return r;
+      }
+      if (!job.data.jobId) return 'skipped';
       const result = await processGenerationJob(
         job.data.jobId,
         // attemptsMade = finished attempts before this one.
         { attempt: job.attemptsMade + 1, maxAttempts: deps.maxAttempts, signal },
-        { prisma, provider, storage, logger, metrics },
+        { prisma, provider, motion, editor, storage, logger, metrics },
       );
       if (result === 'retry') throw new Error('transient provider failure, retrying');
       return result;
@@ -57,7 +102,7 @@ export function startGenerationWorker(deps: GenerationWorkerDeps) {
     // Out of attempts but the processor never got to refund (e.g. S3 kept failing):
     // the sweeper will refund it after the timeout. Log it loudly so it's visible.
     if (job.attemptsMade >= deps.maxAttempts && !(err instanceof UnrecoverableError)) {
-      logger.error({ jobId: job.data.jobId, err: err.message }, 'job exhausted retries');
+      logger.error({ jobId: job.data.jobId, uploadId: job.data.uploadId, err: err.message }, 'job exhausted retries');
     }
   });
   worker.on('error', (err) => logger.error({ err: err.message }, 'worker error'));
@@ -66,6 +111,11 @@ export function startGenerationWorker(deps: GenerationWorkerDeps) {
     try {
       const n = await sweepStuckJobs(prisma, deps.jobTimeoutMinutes, metrics);
       if (n > 0) logger.warn({ refunded: n }, 'swept stuck jobs');
+      // Uploads started but never completed (tab closed mid-upload).
+      const u = await sweepStaleUploads(prisma, storage);
+      if (u > 0) logger.info({ removed: u }, 'swept stale uploads');
+      const t = await sweepStuckTranscriptions(prisma, deps.jobTimeoutMinutes);
+      if (t > 0) logger.warn({ refunded: t }, 'swept stuck transcriptions');
     } catch (err) {
       logger.error({ err: (err as Error).message }, 'sweeper failed');
     }

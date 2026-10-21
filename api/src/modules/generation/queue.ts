@@ -4,9 +4,14 @@ import { withTimeout } from '../../lib/redis.js';
 
 export const GENERATION_QUEUE = 'generation';
 
-/** What travels through Redis: just the id. The DB row is the source of truth for everything else. */
+/**
+ * What travels through Redis: just an id. The DB row is the source of truth for everything else.
+ * Generation jobs carry `jobId`; transcriptions (audio -> words) carry `uploadId`.
+ */
 export interface GenerationJobData {
-  jobId: string;
+  jobId?: string;
+  uploadId?: string;
+  sceneId?: string;
 }
 
 export interface JobQueueOptions {
@@ -44,6 +49,17 @@ export function createJobQueue(connection: Redis, opts: JobQueueOptions) {
       // Hard cap: if Redis is unreachable, give up in 3 s and let the caller refund + 503.
       await withTimeout(queue.add('generate', { jobId }, { jobId }), opts.enqueueTimeoutMs ?? 3_000, 'enqueue timed out');
     },
+    /**
+     * Speech-to-text for an upload. BullMQ id = 'stt:<uploadId>:<ref>' (ref changes per request),
+     * so a retried enqueue is a no-op but a NEW transcription after a failure can run.
+     */
+    async enqueueTranscription(uploadId: string, ref: string) {
+      await withTimeout(queue.add('transcribe', { uploadId }, { jobId: `stt:${uploadId}:${ref}` }), opts.enqueueTimeoutMs ?? 3_000, 'enqueue timed out');
+    },
+    /** Scene Director production. Id per attempt so a retry after a failure runs again. */
+    async enqueueScene(sceneId: string, attempt: string) {
+      await withTimeout(queue.add('scene', { sceneId }, { jobId: `scene:${sceneId}:${attempt}`, attempts: 2 }), opts.enqueueTimeoutMs ?? 3_000, 'enqueue timed out');
+    },
     async counts() {
       return queue.getJobCounts('waiting', 'active', 'delayed', 'failed', 'completed');
     },
@@ -51,4 +67,5 @@ export function createJobQueue(connection: Redis, opts: JobQueueOptions) {
   };
 }
 
-export type JobQueue = Pick<ReturnType<typeof createJobQueue>, 'enqueue' | 'close'>;
+export type JobQueue = Pick<ReturnType<typeof createJobQueue>, 'enqueue' | 'close'> &
+  Partial<Pick<ReturnType<typeof createJobQueue>, 'enqueueTranscription' | 'enqueueScene'>>;

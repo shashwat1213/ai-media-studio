@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react';
-import { BrowserRouter, Route, Routes } from 'react-router';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router';
 import { Loader2 } from 'lucide-react';
 import { GuestOnly, RequireAuth } from '@/features/auth/route-guards';
 
@@ -7,16 +7,18 @@ import { GuestOnly, RequireAuth } from '@/features/auth/route-guards';
 // when that route is visited. The login page doesn't ship dashboard code.
 const AppShell = lazy(() => import('@/components/layout/app-shell').then((m) => ({ default: m.AppShell })));
 const DashboardPage = lazy(() => import('@/pages/dashboard-page').then((m) => ({ default: m.DashboardPage })));
-const GeneratePage = lazy(() => import('@/pages/generate-page').then((m) => ({ default: m.GeneratePage })));
+const StudioPage = lazy(() => import('@/pages/studio-page').then((m) => ({ default: m.StudioPage })));
+const DirectorPage = lazy(() => import('@/pages/director-page').then((m) => ({ default: m.DirectorPage })));
 const GalleryPage = lazy(() => import('@/pages/gallery-page').then((m) => ({ default: m.GalleryPage })));
 const LoginPage = lazy(() => import('@/pages/login-page').then((m) => ({ default: m.LoginPage })));
 const RegisterPage = lazy(() => import('@/pages/register-page').then((m) => ({ default: m.RegisterPage })));
+const LandingPage = lazy(() => import('@/pages/landing-page').then((m) => ({ default: m.LandingPage })));
 const NotFoundPage = lazy(() => import('@/pages/not-found-page').then((m) => ({ default: m.NotFoundPage })));
 
 function PageFallback() {
   return (
-    <div className="flex min-h-screen items-center justify-center">
-      <Loader2 className="size-6 animate-spin text-muted-foreground" aria-label="Loading" />
+    <div className="flex min-h-screen items-center justify-center bg-background">
+      <Loader2 className="size-6 animate-spin text-primary" aria-label="Loading" />
     </div>
   );
 }
@@ -30,10 +32,15 @@ export default function App() {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
           </Route>
-          <Route element={<RequireAuth />}>
+          {/* One shell for all app pages (so the nav animates between them). Logged out,
+              "/" shows the marketing page instead of redirecting to /login. */}
+          <Route element={<RequireAuth landing={<LandingPage />} />}>
             <Route element={<AppShell />}>
               <Route index element={<DashboardPage />} />
-              <Route path="/generate" element={<GeneratePage />} />
+              <Route path="/studio" element={<StudioPage />} />
+              {/* Old link (bookmarks, README): keep it working. */}
+              <Route path="/generate" element={<Navigate to="/studio" replace />} />
+              <Route path="/director" element={<DirectorPage />} />
               <Route path="/gallery" element={<GalleryPage />} />
             </Route>
           </Route>

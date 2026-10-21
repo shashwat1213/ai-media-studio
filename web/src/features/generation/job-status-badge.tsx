@@ -5,7 +5,7 @@ import type { JobStatus } from '@/lib/api';
 const styles: Record<JobStatus, { label: string; className: string; Icon: typeof Clock; spin?: boolean }> = {
   QUEUED: { label: 'Queued', className: 'bg-muted text-muted-foreground', Icon: Clock },
   PROCESSING: { label: 'Generating', className: 'bg-primary/10 text-primary', Icon: Loader2, spin: true },
-  DONE: { label: 'Done', className: 'bg-emerald-500/10 text-emerald-700', Icon: CheckCircle2 },
+  DONE: { label: 'Done', className: 'bg-success/10 text-success', Icon: CheckCircle2 },
   FAILED: { label: 'Failed', className: 'bg-destructive/10 text-destructive', Icon: XCircle },
 };
 

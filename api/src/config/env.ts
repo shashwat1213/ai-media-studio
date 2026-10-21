@@ -12,6 +12,10 @@ const bool = z
   .enum(['true', 'false', '1', '0'])
   .transform((v) => v === 'true' || v === '1');
 
+/** Treat an empty string as "not set" for an optional variable. */
+const emptyAsUnset = <T extends z.ZodTypeAny>(schema: T) =>
+  z.preprocess((v) => (v === '' ? undefined : v), schema);
+
 const SharedSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   DATABASE_URL: z.string().url(),
@@ -36,10 +40,25 @@ const SharedSchema = z.object({
   SIGNED_URL_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(900),
 
   // --- AI provider ---
-  // 'stub' = free local fake images. 'openrouter' = real (paid) calls; needs a key.
-  AI_PROVIDER: z.enum(['stub', 'openrouter']).default('stub'),
+  // 'stub' = free local fake images. 'cloudflare' = real AI on Workers AI's FREE daily allocation
+  // (needs an account id + API token). 'openrouter' = real, PAID calls; needs a key.
+  AI_PROVIDER: z.enum(['stub', 'cloudflare', 'openrouter']).default('stub'),
   OPENROUTER_API_KEY: z.string().optional(),
+  CLOUDFLARE_ACCOUNT_ID: z.string().optional(),
+  CLOUDFLARE_API_TOKEN: z.string().optional(),
   STUB_DELAY_MS: z.coerce.number().int().min(0).default(2500),
+  // Speech (voice-over + transcription). 'auto' = Cloudflare when its credentials are set, else the
+  // free offline stub. Same free daily Workers AI allocation as the images.
+  SPEECH_PROVIDER: z.enum(['auto', 'cloudflare', 'stub']).default('auto'),
+  // Local AI (scripts/local-ai): LLM director on :8081, pictures/Piper/whisper gateway on :8082.
+  // Unset = Scene Director uses the offline stubs (tests/CI); the editor works either way.
+  // docker-compose passes `${VAR:-}` as an EMPTY string when the host has no value (e.g. CI),
+  // so "" means "not set" here, not "invalid URL".
+  LOCAL_AI_URL: emptyAsUnset(z.string().url().optional()),
+  LOCAL_LLM_URL: emptyAsUnset(z.string().url().optional()),
+  /** Optional second LLM for Hinglish -> Devanagari (Gemma-3-4B on :8083). Defaults to LOCAL_LLM_URL. */
+  LOCAL_SCRIBE_URL: emptyAsUnset(z.string().url().optional()),
+  LOCAL_AI_TOKEN: emptyAsUnset(z.string().min(16).optional()),
   PROVIDER_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
 
   // --- Jobs ---
@@ -49,6 +68,8 @@ const SharedSchema = z.object({
 });
 
 const ApiSchema = SharedSchema.extend({
+  /** ffmpeg/ffprobe for voice-over joining (the API image ships them). */
+  FFMPEG_PATH: z.string().min(1).default('ffmpeg'),
   PORT: z.coerce.number().int().positive().default(4000),
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
   // >= 32 chars: HS256 needs a long random secret to resist brute force.
@@ -63,17 +84,25 @@ const ApiSchema = SharedSchema.extend({
 const WorkerSchema = SharedSchema.extend({
   WORKER_PORT: z.coerce.number().int().positive().default(4001), // /health + /metrics
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(4),
+  /** ffmpeg binary for MOTION jobs (image -> MP4). Installed in the Docker image; on a dev machine use the system one. */
+  FFMPEG_PATH: z.string().min(1).default('ffmpeg'),
 });
 
 const needsMetricsToken = (e: { NODE_ENV: string; METRICS_TOKEN?: string }) =>
   e.NODE_ENV !== 'production' || Boolean(e.METRICS_TOKEN);
 const needsKey = (e: { AI_PROVIDER: string; OPENROUTER_API_KEY?: string }) =>
   e.AI_PROVIDER !== 'openrouter' || Boolean(e.OPENROUTER_API_KEY);
+const needsCloudflare = (e: { AI_PROVIDER: string; CLOUDFLARE_ACCOUNT_ID?: string; CLOUDFLARE_API_TOKEN?: string }) =>
+  e.AI_PROVIDER !== 'cloudflare' || Boolean(e.CLOUDFLARE_ACCOUNT_ID && e.CLOUDFLARE_API_TOKEN);
 
 function finalize<T extends z.ZodTypeAny>(schema: T) {
   return schema
     .refine(needsMetricsToken, { message: 'METRICS_TOKEN is required in production', path: ['METRICS_TOKEN'] })
-    .refine(needsKey, { message: 'OPENROUTER_API_KEY is required when AI_PROVIDER=openrouter', path: ['OPENROUTER_API_KEY'] });
+    .refine(needsKey, { message: 'OPENROUTER_API_KEY is required when AI_PROVIDER=openrouter', path: ['OPENROUTER_API_KEY'] })
+    .refine(needsCloudflare, {
+      message: 'CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required when AI_PROVIDER=cloudflare',
+      path: ['CLOUDFLARE_API_TOKEN'],
+    });
 }
 
 export type SharedEnv = z.infer<typeof SharedSchema>;
