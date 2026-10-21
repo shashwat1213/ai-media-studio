@@ -59,6 +59,9 @@ const SharedSchema = z.object({
   /** Optional second LLM for Hinglish -> Devanagari (Gemma-3-4B on :8083). Defaults to LOCAL_LLM_URL. */
   LOCAL_SCRIBE_URL: emptyAsUnset(z.string().url().optional()),
   LOCAL_AI_TOKEN: emptyAsUnset(z.string().min(16).optional()),
+  // Scene Director engines. 'auto' = local AI when LOCAL_* is set, else offline stubs.
+  // 'cloudflare' = shot list + pictures on Workers AI's free allocation (for servers with no GPU).
+  DIRECTOR_PROVIDER: z.enum(['auto', 'cloudflare']).default('auto'),
   PROVIDER_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
 
   // --- Jobs ---
@@ -95,8 +98,15 @@ const needsKey = (e: { AI_PROVIDER: string; OPENROUTER_API_KEY?: string }) =>
 const needsCloudflare = (e: { AI_PROVIDER: string; CLOUDFLARE_ACCOUNT_ID?: string; CLOUDFLARE_API_TOKEN?: string }) =>
   e.AI_PROVIDER !== 'cloudflare' || Boolean(e.CLOUDFLARE_ACCOUNT_ID && e.CLOUDFLARE_API_TOKEN);
 
+const needsCloudflareDirector = (e: { DIRECTOR_PROVIDER: string; CLOUDFLARE_ACCOUNT_ID?: string; CLOUDFLARE_API_TOKEN?: string }) =>
+  e.DIRECTOR_PROVIDER !== 'cloudflare' || Boolean(e.CLOUDFLARE_ACCOUNT_ID && e.CLOUDFLARE_API_TOKEN);
+
 function finalize<T extends z.ZodTypeAny>(schema: T) {
   return schema
+    .refine(needsCloudflareDirector, {
+      message: 'CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required when DIRECTOR_PROVIDER=cloudflare',
+      path: ['DIRECTOR_PROVIDER'],
+    })
     .refine(needsMetricsToken, { message: 'METRICS_TOKEN is required in production', path: ['METRICS_TOKEN'] })
     .refine(needsKey, { message: 'OPENROUTER_API_KEY is required when AI_PROVIDER=openrouter', path: ['OPENROUTER_API_KEY'] })
     .refine(needsCloudflare, {

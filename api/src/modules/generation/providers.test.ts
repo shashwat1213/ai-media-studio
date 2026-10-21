@@ -136,11 +136,12 @@ describe('config', () => {
     try {
       expect(() => loadWorkerEnv({ ...base, AI_PROVIDER: 'openrouter' })).toThrow('exit');
       expect(() => loadEnv({ ...base, NODE_ENV: 'production' })).toThrow('exit');
+      expect(() => loadEnv({ ...base, DIRECTOR_PROVIDER: 'cloudflare' })).toThrow('exit');
     } finally {
       process.exit = origExit;
       console.error = origErr;
     }
-    expect(exits).toEqual([1, 1]);
+    expect(exits).toEqual([1, 1, 1]);
   });
 });
 

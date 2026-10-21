@@ -20,3 +20,6 @@ terraform.tfvars
 api/.scratch/
 __pycache__/
 *.pyc
+
+# VM deploy secrets
+.env.prod
