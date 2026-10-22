@@ -40,3 +40,28 @@ describe('demo account', () => {
     expect(await ledgerSum(userId)).toBe(40);
   });
 });
+
+describe('one-click demo login (/auth/demo)', () => {
+  const demo = { email: 'recruiter@demo.dev', password: 'demo-pass-123', dailyCredits: 100 };
+
+  it('is disabled (404) when no demo account is configured', async () => {
+    expect((await request(app).get('/auth/demo').expect(200)).body).toEqual({ enabled: false });
+    await request(app).post('/auth/demo').set('content-type', 'application/json').send({}).expect(404);
+  });
+
+  it('logs into the demo account without the client knowing the password', async () => {
+    await ensureDemoAccount(prisma, { ...base });
+    const demoApp = makeApp({ demo });
+    expect((await request(demoApp).get('/auth/demo').expect(200)).body).toEqual({ enabled: true });
+    const res = await request(demoApp).post('/auth/demo').set('content-type', 'application/json').send({}).expect(200);
+    expect(res.body.user).toMatchObject({ email: 'recruiter@demo.dev', credits: 100 });
+    expect(JSON.stringify(res.body)).not.toContain('demo-pass-123');
+    const cookie = (res.headers['set-cookie'] as unknown as string[])[0]!.split(';')[0]!;
+    const me = await request(demoApp).get('/auth/me').set('Cookie', cookie).expect(200);
+    expect(me.body.user.email).toBe('recruiter@demo.dev');
+  });
+
+  it('401 when configured but the account was never created', async () => {
+    await request(makeApp({ demo })).post('/auth/demo').set('content-type', 'application/json').send({}).expect(401);
+  });
+});

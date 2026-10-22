@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import type { AppConfig } from '../../config/app-config.js';
-import { unauthorized } from '../../lib/errors.js';
+import { notFound, unauthorized } from '../../lib/errors.js';
 import { CredentialsSchema } from './auth.schemas.js';
 import type { AuthService } from './auth.service.js';
 import { requireAuth } from './require-auth.js';
@@ -33,6 +33,19 @@ export function authRouter(auth: AuthService, config: AppConfig): Router {
   router.post('/auth/login', limiter, async (req, res) => {
     const creds = CredentialsSchema.parse(req.body);
     const user = await auth.login(creds);
+    issueSession(res, user.id);
+    res.json({ user });
+  });
+
+  // One-click demo: logs into the shared demo account (credentials stay on the server).
+  // Only exists when DEMO_EMAIL/DEMO_PASSWORD are configured; otherwise 404.
+  router.get('/auth/demo', (_req, res) => {
+    res.json({ enabled: Boolean(config.demo) });
+  });
+
+  router.post('/auth/demo', limiter, async (_req, res) => {
+    if (!config.demo) throw notFound();
+    const user = await auth.login({ email: config.demo.email.toLowerCase(), password: config.demo.password });
     issueSession(res, user.id);
     res.json({ user });
   });

@@ -10,6 +10,7 @@ import { Aurora } from '@/components/fx/aurora';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { credentialsSchema, type Credentials } from './schemas';
+import { DemoButton } from './demo-button';
 
 interface Props {
   mode: 'login' | 'register';
@@ -156,6 +157,9 @@ export function AuthForm({ mode, onSubmit }: Props) {
               </p>
             </form>
           </Form>
+          <div className="mt-6 border-t pt-6">
+            <DemoButton className="h-11 w-full rounded-xl" label="Just looking? Try the demo account" />
+          </div>
         </motion.div>
       </div>
     </div>

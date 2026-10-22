@@ -32,6 +32,25 @@ export function useLogin() {
   });
 }
 
+/** Is the public one-click demo account configured on this server? */
+export function useDemoEnabled() {
+  return useQuery({
+    queryKey: ['auth', 'demo'],
+    queryFn: async () => (await api<{ enabled: boolean }>('/auth/demo')).enabled,
+    staleTime: Infinity,
+    retry: false,
+  });
+}
+
+/** One click: the server logs you into the shared demo account (the password never reaches the browser). */
+export function useDemoLogin() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api<{ user: User }>('/auth/demo', { method: 'POST', body: '{}' }),
+    onSuccess: ({ user }) => qc.setQueryData(meKey, user),
+  });
+}
+
 export function useRegister() {
   const qc = useQueryClient();
   return useMutation({

@@ -7,6 +7,7 @@ import { Aurora } from '@/components/fx/aurora';
 import { Button } from '@/components/ui/button';
 import { useSpotlight } from '@/lib/use-spotlight';
 import { useModels } from '@/features/generation/use-generation';
+import { DemoButton } from '@/features/auth/demo-button';
 
 const PROMPTS = [
   'a lone astronaut in a field of glowing violet flowers, 35mm film',
@@ -28,10 +29,11 @@ const TILES = [
 ];
 
 const FEATURES = [
+  { icon: Clapperboard, title: 'Scene Director', body: 'One brief becomes a vertical reel: shot list, pictures, narration in English, Hindi or Hinglish, captions and beat-cut music, ready to edit.' },
   { icon: Zap, title: 'Fast, in the background', body: 'Jobs run on a queue + worker. Click generate and keep working; images appear the moment they finish.' },
   { icon: Coins, title: 'Pay per image', body: 'Credits, not subscriptions. Each model shows its price up front, and you start with 50 free.' },
   { icon: RotateCcw, title: 'Automatic refunds', body: "If a generation fails, your credits come back. Exactly once, guaranteed by the database." },
-  { icon: Clapperboard, title: 'Images that move', body: 'Turn any image into a short cinematic clip: push in, pan, crane up or drift. Preview the move live before rendering.' },
+  { icon: Sparkles, title: 'Images that move', body: 'Turn any image into a short cinematic clip: push in, pan, crane up or drift. Preview the move live before rendering.' },
   { icon: Layers, title: 'Your private gallery', body: 'Every image and video is stored privately and served through short-lived signed links.' },
   { icon: ShieldCheck, title: 'Safe by design', body: 'httpOnly sessions, rate limits, and per-user isolation on every request.' },
 ];
@@ -117,9 +119,9 @@ export function LandingPage() {
             transition={{ delay: 0.05, duration: 0.5 }}
             className="text-gradient text-5xl font-semibold leading-[1.02] tracking-tight sm:text-7xl"
           >
-            Turn words
+            Type one line.
             <br />
-            into images.
+            Get a finished reel.
           </motion.h1>
           <motion.p
             initial={{ opacity: 0, y: 10 }}
@@ -127,8 +129,8 @@ export function LandingPage() {
             transition={{ delay: 0.12 }}
             className="mx-auto mt-6 max-w-xl text-lg text-muted-foreground"
           >
-            Describe anything. Your studio renders it in seconds, keeps it in a private gallery, and only charges for
-            what works.
+            An AI director writes the shot list, paints every shot, adds a voice-over, karaoke captions and music, and
+            renders the MP4. Or just make images. You only pay for what works.
           </motion.p>
 
           {/* Fake composer: a preview of the real one, typing example prompts. */}
@@ -151,6 +153,9 @@ export function LandingPage() {
             </Button>
           </motion.div>
           <p className="mt-3 text-xs text-muted-foreground">No card needed · 50 credits on sign up</p>
+          <div className="mt-6">
+            <DemoButton className="rounded-xl" />
+          </div>
         </div>
       </section>
 
